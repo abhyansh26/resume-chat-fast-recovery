@@ -10,6 +10,18 @@ S3_BUCKET = os.getenv("SNAPSHOT_BUCKET", "resume-snapshots")
 
 app = FastAPI(title="Resume Chat API")
 
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    # accept http://localhost:<any port> and http://127.0.0.1:<any port>
+    allow_origin_regex=r"^http://(localhost|127\.0\.0\.1):\d+$",
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
 class SessionPayload(BaseModel):
     resume: str
     chat: List[dict]
