@@ -9,3 +9,12 @@ web/dist/
 
 # env files
 *.env
+
+# OS/editor junk
+.DS_Store
+
+# local virtualenv at repo root
+.venv/
+
+# accidental temp files
+api/0

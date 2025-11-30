@@ -2,10 +2,6 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Minimal base so you see a change immediately */
-:root { color-scheme: light dark; }
+:root { color-scheme: dark; }
 html, body, #root { height: 100%; }
-body { 
-  background: #0f172a; /* slate-950 */
-  color: #e2e8f0;      /* slate-200 */
-}
+body { @apply bg-slate-950 text-slate-100; }
