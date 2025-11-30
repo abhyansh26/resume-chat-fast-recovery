@@ -25,3 +25,12 @@ export async function sendChat(sessionId: string, message: string) {
   if (!r.ok) throw new Error("Failed to send chat");
   return r.json();
 }
+
+export async function snapshotSession(sessionId: string) {
+  const base = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '');
+  const r = await fetch(`${base}/snapshot/${encodeURIComponent(sessionId)}`, {
+    method: 'POST'
+  });
+  if (!r.ok) throw new Error('Snapshot failed');
+  return r.json();
+}
