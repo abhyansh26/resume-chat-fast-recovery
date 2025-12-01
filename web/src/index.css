@@ -5,3 +5,109 @@
 :root { color-scheme: dark; }
 html, body, #root { height: 100%; }
 body { @apply bg-slate-950 text-slate-100; }
+
+
+/* === A4 canvas + print-safe rules === */
+.a4 {
+  width: 210mm;
+  min-height: 297mm;
+  margin: 12mm auto;
+  padding: 12mm;
+  background: #ffffff;
+  box-shadow: 0 0 0.8rem rgba(0,0,0,0.15);
+  color: #111827;
+  line-height: 1.35;
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica;
+}
+
+.a4 h1, .a4 h2, .a4 h3 { margin: 0 0 6px; }
+.a4 h1 { font-size: 18pt; }
+.a4 h2 { font-size: 14pt; color: #111; border-bottom: 1px solid #e5e7eb; padding-bottom: 4px; }
+.a4 h3 { font-size: 11pt; color: #333; }
+.a4 p, .a4 li { font-size: 10.5pt; margin: 4px 0; }
+.a4 ul { padding-left: 18px; }
+
+@page {
+  size: A4;
+  margin: 12mm;
+}
+
+@media print {
+  body { background: white !important; }
+  .no-print { display: none !important; }
+  .a4 { box-shadow: none !important; margin: 0 !important; width: auto !important; min-height: auto !important; padding: 0 !important; }
+  .page-break { page-break-before: always; }
+}
+
+/* === ATS Classic template === */
+.ats-header { text-align: center; margin-bottom: 10mm; }
+.ats-name { font-size: 20pt; font-weight: 700; letter-spacing: 0.5px; margin: 0 0 4px; }
+.ats-contact { font-size: 10.5pt; color: #374151; }
+.ats-contact a { color: inherit; text-decoration: none; }
+.ats-contact .sep { margin: 0 6px; color: #9ca3af; }
+
+.section { margin: 6mm 0 0; }
+.section-title { font-size: 12pt; font-weight: 700; letter-spacing: 0.4px; border-bottom: 1px solid #e5e7eb; padding-bottom: 2px; margin: 0 0 6px; }
+
+.job { margin: 4mm 0 0; }
+.job-head { display: flex; justify-content: space-between; font-size: 11pt; font-weight: 600; }
+.job-meta { color: #4b5563; font-size: 10pt; margin-top: 2px; }
+ul.ats { margin: 4px 0 0; padding-left: 18px; }
+ul.ats > li { margin: 2px 0; font-size: 10.5pt; }
+
+/* --- Print quality + section separation --- */
+@media print {
+  html, body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .no-print { display: none !important; }
+}
+
+.section { margin-top: 10mm; }
+.section:first-of-type { margin-top: 0; }
+
+.section-title {
+  font-size: 12pt; font-weight: 700; letter-spacing: 0.4px;
+  border-bottom: 1px solid #e5e7eb; padding-bottom: 3px; margin: 0 0 5mm;
+}
+
+/* visual separators even without borders in some PDF viewers */
+.section + .section { border-top: 1px solid #f1f5f9; padding-top: 8mm; }
+
+.ats-header { text-align: center; margin-bottom: 10mm; }
+.ats-name { font-size: 20pt; font-weight: 700; letter-spacing: .5px; margin: 0 0 3mm; }
+.ats-contact { font-size: 10.5pt; color: #374151; line-height: 1.4; }
+.ats-contact a { color: inherit; text-decoration: none; }
+.ats-contact .sep { margin: 0 6px; color: #9ca3af; }
+
+.job { margin-top: 5mm; }
+.job-head { display: flex; justify-content: space-between; font-size: 11pt; font-weight: 600; }
+.job-meta { color: #4b5563; font-size: 10pt; margin-top: 1mm; }
+ul.ats { margin: 3mm 0 0; padding-left: 18px; }
+ul.ats > li { margin: 1.5mm 0; font-size: 10.5pt; }
+
+/* optional manual page break helper */
+.break-before { page-break-before: always; }
+
+
+.a4 {
+  width: 210mm;
+  min-height: 297mm;
+  margin: 0 auto;
+  background: #fff;
+  padding: 15mm;
+  box-shadow: 0 2px 10px rgba(0,0,0,.08);
+}
+@media print {
+  .a4 { box-shadow: none; margin: 0; }
+}
+
+@page {
+  size: Letter;
+  margin: 0.6in;
+}
+
+@media print {
+  .no-print { display: none !important; }
+  body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  /* Keep fonts readable for ATS parsers: strong contrast, minimal colors */
+  h1,h2,h3 { color: #000 !important; }
+}

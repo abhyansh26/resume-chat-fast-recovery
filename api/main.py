@@ -1,12 +1,14 @@
+# main.py
 import os, json, time
 from typing import List, Optional
+
 from fastapi import FastAPI
-from pydantic import BaseModel
-from mangum import Mangum
 from fastapi.middleware.cors import CORSMiddleware
+from mangum import Mangum
+from pydantic import BaseModel
 import httpx
 
-# -------- Env --------
+# ---------------- Env ----------------
 LOCAL_DEV = os.getenv("LOCAL_DEV", "0") == "1"
 DDB_TABLE = os.getenv("DDB_TABLE", "Sessions")
 S3_BUCKET = os.getenv("SNAPSHOT_BUCKET", "resume-snapshots")
@@ -20,10 +22,10 @@ OPENAI_MODEL   = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 ALLOWED_ORIGINS_ENV = os.getenv("ALLOWED_ORIGINS", "")
 
-# -------- App --------
+# ---------------- App ----------------
 app = FastAPI(title="Resume Chat API")
 
-# CORS: allow CloudFront in prod, localhost in dev
+# CORS: explicit list via ALLOWED_ORIGINS, else allow localhost:* for dev
 if ALLOWED_ORIGINS_ENV:
     allowed = [o.strip() for o in ALLOWED_ORIGINS_ENV.split(",") if o.strip()]
 else:
@@ -46,7 +48,7 @@ else:
         allow_headers=["*"],
     )
 
-# -------- Models --------
+# ---------------- Models ----------------
 class SessionPayload(BaseModel):
     resume: str
     chat: List[dict]
@@ -58,10 +60,10 @@ class ChatRequest(BaseModel):
     sessionId: str
     message: str
 
-# -------- Storage --------
+# ---------------- Storage ----------------
 if LOCAL_DEV:
-    _mem_resume = {}
-    _mem_chat = {}
+    _mem_resume: dict[str, str] = {}
+    _mem_chat: dict[str, List[dict]] = {}
 else:
     import boto3
     from boto3.dynamodb.conditions import Key
@@ -79,7 +81,7 @@ def save_resume(session_id: str, text: str):
         "sessionId": session_id,
         "itemKey": "resume#latest",
         "text": text,
-        "updatedAt": now_ms()
+        "updatedAt": now_ms(),
     })
 
 def get_resume(session_id: str) -> Optional[str]:
@@ -98,7 +100,7 @@ def append_chat(session_id: str, role: str, text: str, ts: Optional[int] = None)
         "itemKey": f"chat#{ts}",
         "role": role,
         "text": text,
-        "ts": ts
+        "ts": ts,
     })
 
 def list_chat(session_id: str, last_n: int = 50) -> List[dict]:
@@ -106,7 +108,7 @@ def list_chat(session_id: str, last_n: int = 50) -> List[dict]:
         return _mem_chat.get(session_id, [])[-last_n:]
     resp = ddb.query(
         KeyConditionExpression=Key("sessionId").eq(session_id) & Key("itemKey").begins_with("chat#"),
-        ScanIndexForward=True
+        ScanIndexForward=True,
     )
     items = resp.get("Items", [])
     msgs = [{"role": it["role"], "text": it["text"], "ts": it["ts"]} for it in items]
@@ -119,7 +121,7 @@ def write_snapshot(session_id: str, payload: SessionPayload):
         Bucket=S3_BUCKET,
         Key=f"sessions/{session_id}/latest.json",
         Body=json.dumps(payload.model_dump()).encode("utf-8"),
-        ContentType="application/json"
+        ContentType="application/json",
     )
 
 def read_snapshot(session_id: str) -> Optional[SessionPayload]:
@@ -141,7 +143,7 @@ def rehydrate_from_snapshot(session_id: str) -> Optional[SessionPayload]:
         append_chat(session_id, msg["role"], msg["text"], msg.get("ts"))
     return snap
 
-# -------- LLM --------
+# ---------------- LLM ----------------
 def generate_reply(prompt: str) -> str:
     """
     Returns a rewritten resume bullet or assistant text.
@@ -160,10 +162,10 @@ def generate_reply(prompt: str) -> str:
                 "model": GROQ_MODEL,
                 "messages": [
                     {"role": "system", "content": "You are a concise resume assistant. Improve clarity, impact, and metrics."},
-                    {"role": "user", "content": prompt}
+                    {"role": "user", "content": prompt},
                 ],
                 "temperature": 0.4,
-                "max_tokens": 120
+                "max_tokens": 120,
             }
             with httpx.Client(timeout=20) as client:
                 r = client.post(url, headers=headers, json=payload)
@@ -173,7 +175,7 @@ def generate_reply(prompt: str) -> str:
         except Exception as e:
             return f"LLM error (groq): {str(e)}"
 
-    elif LLM_PROVIDER == "openai":
+    if LLM_PROVIDER == "openai":
         if not OPENAI_API_KEY:
             return "LLM not configured (missing OPENAI_API_KEY)."
         try:
@@ -186,10 +188,10 @@ def generate_reply(prompt: str) -> str:
                 "model": OPENAI_MODEL,
                 "messages": [
                     {"role": "system", "content": "You are a concise resume assistant. Improve clarity, impact, and metrics."},
-                    {"role": "user", "content": prompt}
+                    {"role": "user", "content": prompt},
                 ],
                 "temperature": 0.4,
-                "max_tokens": 120
+                "max_tokens": 120,
             }
             with httpx.Client(timeout=20) as client:
                 r = client.post(url, headers=headers, json=payload)
@@ -202,7 +204,11 @@ def generate_reply(prompt: str) -> str:
     # Fallback mock
     return f"Here’s a clearer version: {prompt}"
 
-# -------- Routes --------
+# ---------------- Routes ----------------
+@app.get("/")
+def root():
+    return {"ok": True, "hint": "See /health, /session/{id}, /chat"}
+
 @app.get("/health")
 def health():
     return {"ok": True, "ts": now_ms(), "local": LOCAL_DEV}
@@ -211,7 +217,7 @@ def health():
 def llm_status():
     provider = LLM_PROVIDER
     has_key = bool(GROQ_API_KEY or OPENAI_API_KEY)
-    return {"provider": provider, "apiKeyPresent": has_key, "model": GROQ_MODEL if provider=="groq" else OPENAI_MODEL}
+    return {"provider": provider, "apiKeyPresent": has_key, "model": GROQ_MODEL if provider == "groq" else OPENAI_MODEL}
 
 @app.get("/session/{sessionId}")
 def get_session(sessionId: str):
@@ -243,4 +249,5 @@ def snapshot(sessionId: str):
     write_snapshot(sessionId, payload)
     return {"snapshotted": True, "countMessages": len(payload.chat)}
 
+# Lambda handler
 handler = Mangum(app)

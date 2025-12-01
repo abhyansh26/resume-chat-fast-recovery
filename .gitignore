@@ -18,3 +18,7 @@ web/dist/
 
 # accidental temp files
 api/0
+api/build/
+api/deploy.zip
+deploy.zip
+web/.env*
