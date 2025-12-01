@@ -22,3 +22,7 @@ api/build/
 api/deploy.zip
 deploy.zip
 web/.env*
+# Local env files (do NOT commit)
+api/.env*
+web/.env*
+
