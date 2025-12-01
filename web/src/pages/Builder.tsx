@@ -1,12 +1,11 @@
 // web/src/pages/Builder.tsx
-import type { KeyboardEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { getSession, saveResume, sendChat, snapshotSession } from "../api";
 import BulletWizard from "../components/BulletWizard";
 import JDPanel from "../components/JDPanel";
+import TemplatePicker from "../components/TemplatePicker";
 
-// ✅ A small helper to debounce function calls (used for autosave)
 function useDebouncedCallback<T extends (...args: any[]) => any>(fn: T, delay = 700) {
   const t = useRef<number | undefined>(undefined);
   return (...args: Parameters<T>) => {
@@ -16,21 +15,17 @@ function useDebouncedCallback<T extends (...args: any[]) => any>(fn: T, delay = 
   };
 }
 
-// ✅ Tiny toast hook to show small popup messages bottom-right
 function useToast() {
   const [msg, setMsg] = useState<string | null>(null);
-
   function show(m: string, ms = 1200) {
     setMsg(m);
     window.setTimeout(() => setMsg(null), ms);
   }
-
   return { msg, show };
 }
 
 export default function Builder() {
   // ---- Session bootstrap ----
-  // We store a sessionId in localStorage so the user comes back to the same resume.
   const [sessionId, setSessionId] = useState(() => {
     const existing = localStorage.getItem("sessionId");
     if (existing) return existing;
@@ -43,18 +38,18 @@ export default function Builder() {
   const [resume, setResume] = useState("");
   const [chat, setChat] = useState<{ role: "user" | "assistant"; text: string; ts?: number }[]>([]);
 
-  // ✅ Loading + error state for initial session load
+  // Load state
   const [loading, setLoading] = useState(true);
   const [loadErr, setLoadErr] = useState<string | null>(null);
 
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [snapshotState, setSnapshotState] = useState<"idle" | "saving" | "saved" | "error">("idle");
 
-  // Chat input + sending flag
+  // chat input
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
 
-  // Resume selection helpers (for selection-aware actions)
+  // resume helpers
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
   const [sel, setSel] = useState<{ start: number; end: number; text: string } | null>(null);
   const [suggestion, setSuggestion] = useState<string | null>(null);
@@ -63,50 +58,41 @@ export default function Builder() {
   const toast = useToast();
   const chatEndRef = useRef<HTMLDivElement | null>(null);
 
-  // ---- Initial load (GET /session/{sessionId}) ----
+  // ---- Initial load ----
   useEffect(() => {
     let ignore = false;
-
     (async () => {
       try {
         setLoading(true);
-        setLoadErr(null);
-
         const data = await getSession(sessionId);
-
         if (!ignore) {
           setResume(data.resume || "");
           setChat(data.chat || []);
+          setLoadErr(null);
         }
       } catch (e: any) {
-        if (!ignore) {
-          console.error("Failed to load session", e);
-          setLoadErr(e?.message || "Failed to load session");
-        }
+        if (!ignore) setLoadErr(e?.message || "Failed to load session");
       } finally {
-        if (!ignore) {
-          setLoading(false);
-        }
+        if (!ignore) setLoading(false);
       }
     })();
-
     return () => {
       ignore = true;
     };
   }, [sessionId]);
 
-  // ---- Autosave resume (debounced, uses PUT /resume/{sessionId}) ----
+  // ---- Autosave resume (debounced) ----
   const debouncedSave = useDebouncedCallback(async (text: string) => {
     try {
       setSaveState("saving");
       await saveResume(sessionId, text);
       setSaveState("saved");
       toast.show("Saved ✓");
-      window.setTimeout(() => setSaveState("idle"), 1000);
+      setTimeout(() => setSaveState("idle"), 1000);
     } catch {
       setSaveState("error");
       toast.show("Save failed ⚠️");
-      window.setTimeout(() => setSaveState("idle"), 1500);
+      setTimeout(() => setSaveState("idle"), 1500);
     }
   }, 700);
 
@@ -115,15 +101,13 @@ export default function Builder() {
     debouncedSave(next);
   }
 
-  // ---- Selection helpers (for quick actions: Rephrase, Shorten, etc.) ----
+  // ---- selection helpers ----
   function captureSelection() {
     const el = editorRef.current;
     if (!el) return;
-
     const start = el.selectionStart ?? 0;
     const end = el.selectionEnd ?? 0;
     const text = (resume || "").slice(start, end);
-
     setSel(text && start !== end ? { start, end, text } : null);
   }
 
@@ -138,96 +122,75 @@ export default function Builder() {
     setSuggestion(null);
   }
 
-  // ---- Assistant chat (POST /chat) ----
+  // ---- Send chat (assistant box) ----
   async function handleSend() {
     const msg = input.trim();
     if (!msg || sending) return;
-
     setSending(true);
     try {
-      // Add user message to chat
       setChat((c) => [...c, { role: "user", text: msg, ts: Date.now() }]);
       setInput("");
-
-      // Ask backend/LLM
       const res = await sendChat(sessionId, msg);
       const assistantMessage = res.assistantMessage ?? "(no reply)";
-
-      // Add assistant reply
       setChat((c) => [...c, { role: "assistant", text: assistantMessage, ts: Date.now() }]);
     } catch {
-      setChat((c) => [
-        ...c,
-        { role: "assistant", text: "⚠️ Failed to reach assistant.", ts: Date.now() },
-      ]);
+      setChat((c) => [...c, { role: "assistant", text: "⚠️ Failed to reach assistant.", ts: Date.now() }]);
     } finally {
       setSending(false);
     }
   }
 
-  // ---- Selection-based quick actions (Chunk 3 will make these smarter) ----
+  // ---- Quick Actions on selected text ----
   async function askFor(kind: "rephrase" | "shorten" | "quantify" | "star") {
     if (!sel?.text) return;
-
     const instructions: Record<string, string> = {
       rephrase: "Rephrase this resume bullet professionally and concisely:",
       shorten: "Shorten this resume bullet, keeping impact and specifics:",
       quantify:
-        "Rewrite this bullet to include measurable impact (numbers or %); if needed, suggest likely ranges:",
-      star:
-        "Rewrite this as a STAR-format bullet (Situation, Task, Action, Result) in one concise line:",
+        "Rewrite this bullet to include measurable impact (numbers or %), ask clarifying metrics if needed:",
+      star: "Rewrite this as a STAR-format bullet (Situation, Task, Action, Result) in one concise line:",
     };
-
     setSending(true);
     try {
       const res = await sendChat(sessionId, `${instructions[kind]}\n\n${sel.text}`);
       const reply = res.assistantMessage ?? "";
-
       setSuggestion(reply || null);
-
-      // Also log into chat
-      setChat((c) => [
-        ...c,
-        { role: "user", text: `${kind.toUpperCase()} on selection`, ts: Date.now() },
-      ]);
-      setChat((c) => [
-        ...c,
-        { role: "assistant", text: reply || "(no suggestion)", ts: Date.now() },
-      ]);
+      // also add to chat stream
+      setChat((c) => [...c, { role: "user", text: `${kind.toUpperCase()} on selection`, ts: Date.now() }]);
+      setChat((c) => [...c, { role: "assistant", text: reply || "(no suggestion)", ts: Date.now() }]);
     } finally {
       setSending(false);
     }
   }
 
-  // ---- Chat keyboard behavior (Enter to send, Shift+Enter for newline) ----
-  function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
+  // ---- Chat keyboard behavior ----
+  function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSend();
     }
   }
 
-  // ---- Snapshot button (POST /snapshot/{sessionId}) ----
+  // ---- Snapshot button ----
   async function handleSnapshot() {
     try {
       setSnapshotState("saving");
       await snapshotSession(sessionId);
       setSnapshotState("saved");
       toast.show("Snapshot saved ✓");
-      window.setTimeout(() => setSnapshotState("idle"), 1000);
+      setTimeout(() => setSnapshotState("idle"), 1000);
     } catch {
       setSnapshotState("error");
       toast.show("Snapshot failed ⚠️");
-      window.setTimeout(() => setSnapshotState("idle"), 1500);
+      setTimeout(() => setSnapshotState("idle"), 1500);
     }
   }
 
-  // ---- Session tools: copy id, new session, export resume as .txt ----
+  // ---- Copy session id / new session / export resume ----
   async function copySession() {
     await navigator.clipboard.writeText(sessionId);
     toast.show("Session ID copied");
   }
-
   function newSession() {
     const s = uuidv4();
     localStorage.setItem("sessionId", s);
@@ -236,7 +199,6 @@ export default function Builder() {
     setChat([]);
     toast.show("New session started");
   }
-
   function exportResume() {
     const blob = new Blob([resume || ""], { type: "text/plain;charset=utf-8" });
     const a = document.createElement("a");
@@ -255,17 +217,15 @@ export default function Builder() {
         handleSnapshot();
       }
     };
-
-    window.addEventListener("keydown", onKey as any);
-    return () => window.removeEventListener("keydown", onKey as any);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   });
 
-  // ---- Auto-scroll chat to bottom ----
+  // ---- Auto-scroll chat ----
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chat.length]);
 
-  // ---- Labels for save + snapshot buttons ----
   const saveLabel = useMemo(() => {
     if (saveState === "saving") return "Saving…";
     if (saveState === "saved") return "Saved ✓";
@@ -280,21 +240,22 @@ export default function Builder() {
     return "Save Snapshot";
   }, [snapshotState]);
 
-  // ---- UI ----
   return (
     <div className="min-h-dvh bg-gradient-to-b from-slate-950 via-slate-950 to-slate-900 text-slate-100">
-      <main className="mx-auto max-w-7xl px-4 py-6">
-        {/* 🔹 Page-level toolbar (NOT a sticky app header) */}
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          {/* Left: current session info */}
+      {/* Header (global app header is in App.tsx; this is the page-specific toolbar) */}
+      <header className="sticky top-0 z-10 backdrop-blur supports-[backdrop-filter]:bg-slate-950/60 border-b border-slate-800">
+        <div className="mx-auto max-w-7xl px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="h-8 w-8 rounded-xl bg-indigo-500/20 border border-indigo-400/40 grid place-items-center">
-              ✍️
+              🗂️
             </div>
             <div>
-              <h2 className="text-sm font-semibold text-slate-100">Current Session</h2>
+              <h2 className="text-lg font-semibold">Resume Builder</h2>
               <p className="text-xs text-slate-400">
-                ID: <span className="font-mono">{sessionId.slice(0, 8)}…</span>
+                Session:{" "}
+                <span className="font-mono">
+                  {sessionId.slice(0, 8)}…
+                </span>
                 <button
                   onClick={copySession}
                   className="ml-2 text-indigo-300 hover:text-indigo-200 underline underline-offset-2"
@@ -305,30 +266,29 @@ export default function Builder() {
             </div>
           </div>
 
-          {/* Right: actions for this page */}
-          <div className="flex flex-wrap items-center gap-2 text-xs">
+          <div className="flex items-center gap-2">
             <button
               onClick={() => setShowWizard(true)}
-              className="rounded-lg border border-slate-700 px-3 py-1.5 hover:bg-slate-800"
+              className="text-xs rounded-lg border border-slate-700 px-3 py-1.5 hover:bg-slate-800"
             >
               Bullet Wizard
             </button>
             <button
               onClick={exportResume}
-              className="rounded-lg border border-slate-700 px-3 py-1.5 hover:bg-slate-800"
+              className="text-xs rounded-lg border border-slate-700 px-3 py-1.5 hover:bg-slate-800"
               title="Download resume.txt"
             >
               Export
             </button>
             <button
               onClick={newSession}
-              className="rounded-lg border border-slate-700 px-3 py-1.5 hover:bg-slate-800"
+              className="text-xs rounded-lg border border-slate-700 px-3 py-1.5 hover:bg-slate-800"
               title="Start a fresh session"
             >
               New
             </button>
             <span
-              className={`px-2 py-1 rounded ${
+              className={`text-xs px-2 py-1 rounded ${
                 saveState === "saving"
                   ? "bg-yellow-500/10 text-yellow-300"
                   : saveState === "saved"
@@ -343,49 +303,51 @@ export default function Builder() {
             <button
               onClick={handleSnapshot}
               disabled={snapshotState === "saving"}
-              className="rounded-xl border border-slate-700 px-4 py-2 text-xs hover:bg-slate-800 disabled:opacity-60"
+              className="text-sm rounded-xl border border-slate-700 px-4 py-2 hover:bg-slate-800 disabled:opacity-60"
               title="Write a durable snapshot (⌘/Ctrl + S)"
             >
               {snapshotLabel}
             </button>
           </div>
         </div>
+      </header>
 
-        {/* Loading & error states */}
+      {/* Body */}
+      <main className="mx-auto max-w-7xl px-4 py-6">
         {loading ? (
           <div className="text-slate-400">Loading session…</div>
         ) : loadErr ? (
-          <div className="text-rose-300">
-            ⚠️ {loadErr}
-            <button
-              className="ml-3 text-xs underline underline-offset-2"
-              onClick={() => window.location.reload()}
-            >
-              Retry
-            </button>
-          </div>
+          <div className="text-rose-300">⚠️ {loadErr}</div>
         ) : (
           <>
-            {/* Editor + Chat grid */}
+            {/* Editor + Chat */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
               {/* Resume Editor */}
               <section className="rounded-2xl border border-slate-800 bg-slate-900/60 overflow-hidden flex flex-col shadow-sm">
                 <header className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
-                  <h2 className="font-medium">Resume Editor</h2>
+                  <h3 className="font-medium">Resume Editor</h3>
                   <span className="text-xs text-slate-400">Autosaves while you type</span>
                 </header>
+
+                {/* 🔹 New: Template picker just under the header */}
+                <TemplatePicker
+                  onApplyTemplate={(tmpl) => {
+                    setResume(tmpl);
+                    debouncedSave(tmpl);
+                    toast.show("Template applied");
+                  }}
+                />
 
                 <textarea
                   ref={editorRef}
                   onSelect={captureSelection}
                   onKeyUp={captureSelection}
                   className="flex-1 bg-transparent p-4 outline-none resize-none font-mono text-sm leading-relaxed min-h-[360px]"
-                  placeholder="Paste or start your resume here…"
+                  placeholder="Paste or start your resume here… or pick a template above to jump-start."
                   value={resume}
                   onChange={(e) => onResumeChange(e.target.value)}
                 />
-
-                {/* Selection actions */}
+                {/* Quick Actions */}
                 {sel && (
                   <div className="px-4 py-2 border-t border-slate-800 text-sm flex flex-wrap items-center gap-2">
                     <span className="text-slate-400">Actions for selection:</span>
@@ -415,8 +377,6 @@ export default function Builder() {
                     </button>
                   </div>
                 )}
-
-                {/* Suggestion area */}
                 {suggestion && (
                   <div className="px-4 py-3 border-t border-slate-800 bg-slate-900/50">
                     <div className="text-xs text-slate-400 mb-1">Suggestion:</div>
@@ -437,20 +397,17 @@ export default function Builder() {
                     </div>
                   </div>
                 )}
-
                 <footer className="px-4 py-2 border-t border-slate-800 text-xs text-slate-400 flex justify-between">
                   <span>{resume.length} chars</span>
                   <span>Tip: ⌘/Ctrl + S to snapshot</span>
                 </footer>
               </section>
 
-              {/* Assistant Chat */}
+              {/* Chat Panel */}
               <section className="rounded-2xl border border-slate-800 bg-slate-900/60 overflow-hidden flex flex-col shadow-sm">
                 <header className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
-                  <h2 className="font-medium">Assistant Chat</h2>
-                  <span className="text-xs text-slate-400">
-                    Enter to send • Shift+Enter for newline
-                  </span>
+                  <h3 className="font-medium">Assistant Chat</h3>
+                  <span className="text-xs text-slate-400">Enter to send • Shift+Enter for newline</span>
                 </header>
 
                 <div className="flex-1 overflow-y-auto p-4 space-y-3">
@@ -496,7 +453,7 @@ export default function Builder() {
               </section>
             </div>
 
-            {/* ATS-ish JD Tailor Panel (will get more advanced in later chunks) */}
+            {/* ATS-ish JD Tailor Panel */}
             <div className="mt-5">
               <JDPanel resume={resume} />
             </div>
@@ -521,9 +478,7 @@ export default function Builder() {
                 const start = el.selectionStart ?? resume.length;
                 const before = resume.slice(0, start);
                 const after = resume.slice(start);
-                const next = `${before}${
-                  before && !before.endsWith("\n") ? "\n" : ""
-                }${b}\n${after}`;
+                const next = `${before}${before && !before.endsWith("\n") ? "\n" : ""}${b}\n${after}`;
                 setResume(next);
                 debouncedSave(next);
               } else {
