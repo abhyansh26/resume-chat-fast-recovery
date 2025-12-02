@@ -5,6 +5,7 @@ import { getSession, saveResume, sendChat, snapshotSession } from "../api";
 import BulletWizard from "../components/BulletWizard";
 import JDPanel from "../components/JDPanel";
 import TemplatePicker from "../components/TemplatePicker";
+import type { ResumeModel } from "../types/resumeModel";
 
 function useDebouncedCallback<T extends (...args: any[]) => any>(fn: T, delay = 700) {
   const t = useRef<number | undefined>(undefined);
@@ -36,6 +37,7 @@ export default function Builder() {
 
   // ---- App state ----
   const [resume, setResume] = useState("");
+  const [resumeModel, setResumeModel] = useState<ResumeModel | null>(null);
   const [chat, setChat] = useState<{ role: "user" | "assistant"; text: string; ts?: number }[]>([]);
 
   // Load state
@@ -69,6 +71,8 @@ export default function Builder() {
           setResume(data.resume || "");
           setChat(data.chat || []);
           setLoadErr(null);
+          // For now, we don't attempt to parse old resumes into ResumeModel.
+          // resumeModel stays null until a template is applied or we add parsing later.
         }
       } catch (e: any) {
         if (!ignore) setLoadErr(e?.message || "Failed to load session");
@@ -134,7 +138,14 @@ export default function Builder() {
       const assistantMessage = res.assistantMessage ?? "(no reply)";
       setChat((c) => [...c, { role: "assistant", text: assistantMessage, ts: Date.now() }]);
     } catch {
-      setChat((c) => [...c, { role: "assistant", text: "⚠️ Failed to reach assistant.", ts: Date.now() }]);
+      setChat((c) => [
+        ...c,
+        {
+          role: "assistant",
+          text: "⚠️ Failed to reach assistant.",
+          ts: Date.now(),
+        },
+      ]);
     } finally {
       setSending(false);
     }
@@ -196,6 +207,7 @@ export default function Builder() {
     localStorage.setItem("sessionId", s);
     setSessionId(s);
     setResume("");
+    setResumeModel(null);
     setChat([]);
     toast.show("New session started");
   }
@@ -242,7 +254,7 @@ export default function Builder() {
 
   return (
     <div className="min-h-dvh bg-gradient-to-b from-slate-950 via-slate-950 to-slate-900 text-slate-100">
-      {/* Header (global app header is in App.tsx; this is the page-specific toolbar) */}
+      {/* Header (page toolbar) */}
       <header className="sticky top-0 z-10 backdrop-blur supports-[backdrop-filter]:bg-slate-950/60 border-b border-slate-800">
         <div className="mx-auto max-w-7xl px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -262,6 +274,11 @@ export default function Builder() {
                 >
                   copy
                 </button>
+                {resumeModel && (
+                  <span className="ml-3 text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-300 border border-emerald-500/30">
+                    Structured template active
+                  </span>
+                )}
               </p>
             </div>
           </div>
@@ -329,11 +346,12 @@ export default function Builder() {
                   <span className="text-xs text-slate-400">Autosaves while you type</span>
                 </header>
 
-                {/* 🔹 New: Template picker just under the header */}
+                {/* Template picker (now sets both text and structured model) */}
                 <TemplatePicker
-                  onApplyTemplate={(tmpl) => {
-                    setResume(tmpl);
-                    debouncedSave(tmpl);
+                  onApplyTemplate={(tmplText, tmplModel) => {
+                    setResume(tmplText);
+                    setResumeModel(tmplModel);
+                    debouncedSave(tmplText);
                     toast.show("Template applied");
                   }}
                 />
@@ -407,7 +425,9 @@ export default function Builder() {
               <section className="rounded-2xl border border-slate-800 bg-slate-900/60 overflow-hidden flex flex-col shadow-sm">
                 <header className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
                   <h3 className="font-medium">Assistant Chat</h3>
-                  <span className="text-xs text-slate-400">Enter to send • Shift+Enter for newline</span>
+                  <span className="text-xs text-slate-400">
+                    Enter to send • Shift+Enter for newline
+                  </span>
                 </header>
 
                 <div className="flex-1 overflow-y-auto p-4 space-y-3">
