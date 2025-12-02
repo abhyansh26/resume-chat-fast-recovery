@@ -1,9 +1,11 @@
 // web/src/pages/Builder.tsx
-import { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { getSession, saveResume, sendChat, snapshotSession } from "../api";
 import BulletWizard from "../components/BulletWizard";
 import JDPanel from "../components/JDPanel";
+import TemplatePicker from "../components/TemplatePicker";
+import type { ResumeModel } from "../types/resumeModel";
 
 function useDebouncedCallback<T extends (...args: any[]) => any>(fn: T, delay = 700) {
   const t = useRef<number | undefined>(undefined);
@@ -35,16 +37,17 @@ export default function Builder() {
 
   // ---- App state ----
   const [resume, setResume] = useState("");
+  const [resumeModel, setResumeModel] = useState<ResumeModel | null>(null);
   const [chat, setChat] = useState<{ role: "user" | "assistant"; text: string; ts?: number }[]>([]);
 
-  // ✅ add these two to fix setLoading/setLoadErr references
+  // Load state
   const [loading, setLoading] = useState(true);
   const [loadErr, setLoadErr] = useState<string | null>(null);
 
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [snapshotState, setSnapshotState] = useState<"idle" | "saving" | "saved" | "error">("idle");
 
-  // chat input
+  // chat / AI calls
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
 
@@ -52,6 +55,7 @@ export default function Builder() {
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
   const [sel, setSel] = useState<{ start: number; end: number; text: string } | null>(null);
   const [suggestion, setSuggestion] = useState<string | null>(null);
+  const [metricsIdeas, setMetricsIdeas] = useState<string | null>(null);
   const [showWizard, setShowWizard] = useState(false);
 
   const toast = useToast();
@@ -68,6 +72,7 @@ export default function Builder() {
           setResume(data.resume || "");
           setChat(data.chat || []);
           setLoadErr(null);
+          // For now, resumeModel stays null until a template is applied.
         }
       } catch (e: any) {
         if (!ignore) setLoadErr(e?.message || "Failed to load session");
@@ -75,7 +80,9 @@ export default function Builder() {
         if (!ignore) setLoading(false);
       }
     })();
-    return () => { ignore = true; };
+    return () => {
+      ignore = true;
+    };
   }, [sessionId]);
 
   // ---- Autosave resume (debounced) ----
@@ -106,6 +113,9 @@ export default function Builder() {
     const end = el.selectionEnd ?? 0;
     const text = (resume || "").slice(start, end);
     setSel(text && start !== end ? { start, end, text } : null);
+    // When user changes selection, clear previous suggestions/metrics
+    setSuggestion(null);
+    setMetricsIdeas(null);
   }
 
   function replaceSelection(text: string) {
@@ -117,6 +127,43 @@ export default function Builder() {
     debouncedSave(next);
     setSel(null);
     setSuggestion(null);
+    setMetricsIdeas(null);
+  }
+
+  // Insert suggestion as a new bullet below the current selection
+  function insertSuggestionBelow(text: string) {
+    if (!sel) return;
+    const full = resume;
+    const newlineIndex = full.indexOf("\n", sel.end);
+
+    let before: string;
+    let after: string;
+
+    if (newlineIndex === -1) {
+      // No newline after selection → append at end
+      before = full.endsWith("\n") ? full : full + "\n";
+      after = "";
+    } else {
+      before = full.slice(0, newlineIndex + 1);
+      after = full.slice(newlineIndex + 1);
+    }
+
+    // Try to preserve bullet prefix if present
+    const trimmed = sel.text.trimStart();
+    let prefix = "- ";
+    if (trimmed.startsWith("- ")) prefix = "- ";
+    else if (trimmed.startsWith("• ")) prefix = "• ";
+    else if (trimmed.startsWith("* ")) prefix = "* ";
+
+    const newLine = `${prefix}${text}`;
+    const next = `${before}${newLine}\n${after}`;
+
+    setResume(next);
+    debouncedSave(next);
+    setSel(null);
+    setSuggestion(null);
+    setMetricsIdeas(null);
+    toast.show("Inserted below");
   }
 
   // ---- Send chat (assistant box) ----
@@ -131,7 +178,14 @@ export default function Builder() {
       const assistantMessage = res.assistantMessage ?? "(no reply)";
       setChat((c) => [...c, { role: "assistant", text: assistantMessage, ts: Date.now() }]);
     } catch {
-      setChat((c) => [...c, { role: "assistant", text: "⚠️ Failed to reach assistant.", ts: Date.now() }]);
+      setChat((c) => [
+        ...c,
+        {
+          role: "assistant",
+          text: "⚠️ Failed to reach assistant.",
+          ts: Date.now(),
+        },
+      ]);
     } finally {
       setSending(false);
     }
@@ -139,21 +193,76 @@ export default function Builder() {
 
   // ---- Quick Actions on selected text ----
   async function askFor(kind: "rephrase" | "shorten" | "quantify" | "star") {
-    if (!sel?.text) return;
+    if (!sel?.text || sending) return;
+
     const instructions: Record<string, string> = {
-      rephrase: "Rephrase this resume bullet professionally and concisely:",
-      shorten: "Shorten this resume bullet, keeping impact and specifics:",
-      quantify: "Rewrite this bullet to include measurable impact (numbers or %), ask clarifying metrics if needed:",
-      star: "Rewrite this as a STAR-format bullet (Situation, Task, Action, Result) in one concise line:",
+      rephrase:
+        "Rephrase this resume bullet to be more concise, professional, and impact-focused. Keep it one bullet:",
+      shorten:
+        "Shorten this resume bullet while keeping the key action, tools, and impact. Keep it one bullet:",
+      quantify:
+        "Rewrite this resume bullet to include realistic, measurable impact using numbers or percentages. " +
+        "If exact numbers are unknown, you may use placeholders like X%, Y, N as a hint:",
+      star:
+        "Rewrite this resume bullet in STAR format (Situation, Task, Action, Result) but keep it in one concise bullet line:",
     };
+
     setSending(true);
     try {
-      const res = await sendChat(sessionId, `${instructions[kind]}\n\n${sel.text}`);
+      const prompt = `${instructions[kind]}\n\nCurrent bullet:\n${sel.text}`;
+      const res = await sendChat(sessionId, prompt);
       const reply = res.assistantMessage ?? "";
       setSuggestion(reply || null);
-      // also add to chat stream
-      setChat((c) => [...c, { role: "user", text: `${kind.toUpperCase()} on selection`, ts: Date.now() }]);
-      setChat((c) => [...c, { role: "assistant", text: reply || "(no suggestion)", ts: Date.now() }]);
+      setMetricsIdeas(null); // clear metrics to avoid confusion
+
+      // Also add to chat stream for traceability
+      setChat((c) => [
+        ...c,
+        {
+          role: "user",
+          text: `[${kind.toUpperCase()}] on selection:\n${sel.text}`,
+          ts: Date.now(),
+        },
+        {
+          role: "assistant",
+          text: reply || "(no suggestion)",
+          ts: Date.now(),
+        },
+      ]);
+    } finally {
+      setSending(false);
+    }
+  }
+
+  // ---- Metrics helper for a selected bullet ----
+  async function askMetricsHelper() {
+    if (!sel?.text || sending) return;
+    setSending(true);
+    try {
+      const prompt =
+        "You are helping improve a resume bullet by adding measurable impact. " +
+        "Given this bullet, suggest 3–5 specific metrics I could use, such as X%, N users, $Y saved, or time reductions. " +
+        "If exact numbers are unknown, use placeholders like X%, N, or Y.\n\n" +
+        "Bullet:\n" +
+        sel.text;
+
+      const res = await sendChat(sessionId, prompt);
+      const reply = res.assistantMessage ?? "";
+      setMetricsIdeas(reply || null);
+
+      setChat((c) => [
+        ...c,
+        {
+          role: "user",
+          text: `[METRICS HELPER] for selection:\n${sel.text}`,
+          ts: Date.now(),
+        },
+        {
+          role: "assistant",
+          text: reply || "(no metrics ideas)",
+          ts: Date.now(),
+        },
+      ]);
     } finally {
       setSending(false);
     }
@@ -192,7 +301,11 @@ export default function Builder() {
     localStorage.setItem("sessionId", s);
     setSessionId(s);
     setResume("");
+    setResumeModel(null);
     setChat([]);
+    setSel(null);
+    setSuggestion(null);
+    setMetricsIdeas(null);
     toast.show("New session started");
   }
   function exportResume() {
@@ -238,38 +351,67 @@ export default function Builder() {
 
   return (
     <div className="min-h-dvh bg-gradient-to-b from-slate-950 via-slate-950 to-slate-900 text-slate-100">
-      {/* Header */}
+      {/* Header (page toolbar) */}
       <header className="sticky top-0 z-10 backdrop-blur supports-[backdrop-filter]:bg-slate-950/60 border-b border-slate-800">
         <div className="mx-auto max-w-7xl px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="h-8 w-8 rounded-xl bg-indigo-500/20 border border-indigo-400/40 grid place-items-center">🗂️</div>
+            <div className="h-8 w-8 rounded-xl bg-indigo-500/20 border border-indigo-400/40 grid place-items-center">
+              🗂️
+            </div>
             <div>
-              <h1 className="text-lg font-semibold">Resume Chat — Fast Session Recovery</h1>
+              <h2 className="text-lg font-semibold">Resume Builder</h2>
               <p className="text-xs text-slate-400">
-                Session: <span className="font-mono">{sessionId.slice(0, 8)}…</span>
-                <button onClick={copySession} className="ml-2 text-indigo-300 hover:text-indigo-200 underline underline-offset-2">
+                Session:{" "}
+                <span className="font-mono">
+                  {sessionId.slice(0, 8)}…
+                </span>
+                <button
+                  onClick={copySession}
+                  className="ml-2 text-indigo-300 hover:text-indigo-200 underline underline-offset-2"
+                >
                   copy
                 </button>
+                {resumeModel && (
+                  <span className="ml-3 text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-300 border border-emerald-500/30">
+                    Structured template active
+                  </span>
+                )}
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
-            <button onClick={() => setShowWizard(true)} className="text-xs rounded-lg border border-slate-700 px-3 py-1.5 hover:bg-slate-800">
+            <button
+              onClick={() => setShowWizard(true)}
+              className="text-xs rounded-lg border border-slate-700 px-3 py-1.5 hover:bg-slate-800"
+            >
               Bullet Wizard
             </button>
-            <button onClick={exportResume} className="text-xs rounded-lg border border-slate-700 px-3 py-1.5 hover:bg-slate-800" title="Download resume.txt">
+            <button
+              onClick={exportResume}
+              className="text-xs rounded-lg border border-slate-700 px-3 py-1.5 hover:bg-slate-800"
+              title="Download resume.txt"
+            >
               Export
             </button>
-            <button onClick={newSession} className="text-xs rounded-lg border border-slate-700 px-3 py-1.5 hover:bg-slate-800" title="Start a fresh session">
+            <button
+              onClick={newSession}
+              className="text-xs rounded-lg border border-slate-700 px-3 py-1.5 hover:bg-slate-800"
+              title="Start a fresh session"
+            >
               New
             </button>
-            <span className={`text-xs px-2 py-1 rounded ${
-              saveState === "saving" ? "bg-yellow-500/10 text-yellow-300" :
-              saveState === "saved" ? "bg-emerald-500/10 text-emerald-300" :
-              saveState === "error" ? "bg-rose-500/10 text-rose-300" :
-              "bg-slate-800 text-slate-300"
-            }`}>
+            <span
+              className={`text-xs px-2 py-1 rounded ${
+                saveState === "saving"
+                  ? "bg-yellow-500/10 text-yellow-300"
+                  : saveState === "saved"
+                  ? "bg-emerald-500/10 text-emerald-300"
+                  : saveState === "error"
+                  ? "bg-rose-500/10 text-rose-300"
+                  : "bg-slate-800 text-slate-300"
+              }`}
+            >
               {saveLabel}
             </span>
             <button
@@ -297,60 +439,152 @@ export default function Builder() {
               {/* Resume Editor */}
               <section className="rounded-2xl border border-slate-800 bg-slate-900/60 overflow-hidden flex flex-col shadow-sm">
                 <header className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
-                  <h2 className="font-medium">Resume Editor</h2>
+                  <h3 className="font-medium">Resume Editor</h3>
                   <span className="text-xs text-slate-400">Autosaves while you type</span>
                 </header>
+
+                {/* Template picker */}
+                <TemplatePicker
+                  onApplyTemplate={(tmplText, tmplModel) => {
+                    setResume(tmplText);
+                    setResumeModel(tmplModel);
+                    debouncedSave(tmplText);
+                    setSel(null);
+                    setSuggestion(null);
+                    setMetricsIdeas(null);
+                    toast.show("Template applied");
+                  }}
+                />
+
                 <textarea
                   ref={editorRef}
                   onSelect={captureSelection}
                   onKeyUp={captureSelection}
                   className="flex-1 bg-transparent p-4 outline-none resize-none font-mono text-sm leading-relaxed min-h-[360px]"
-                  placeholder="Paste or start your resume here…"
+                  placeholder="Paste or start your resume here… or pick a template above to jump-start."
                   value={resume}
                   onChange={(e) => onResumeChange(e.target.value)}
                 />
-                {/* Quick Actions */}
+
+                {/* Quick Actions (AI on selection) */}
                 {sel && (
                   <div className="px-4 py-2 border-t border-slate-800 text-sm flex flex-wrap items-center gap-2">
-                    <span className="text-slate-400">Actions for selection:</span>
-                    <button className="rounded-md border border-slate-700 px-2 py-1 hover:bg-slate-800" onClick={() => askFor("rephrase")}>Rephrase</button>
-                    <button className="rounded-md border border-slate-700 px-2 py-1 hover:bg-slate-800" onClick={() => askFor("shorten")}>Shorten</button>
-                    <button className="rounded-md border border-slate-700 px-2 py-1 hover:bg-slate-800" onClick={() => askFor("quantify")}>Quantify</button>
-                    <button className="rounded-md border border-slate-700 px-2 py-1 hover:bg-slate-800" onClick={() => askFor("star")}>Make STAR</button>
+                    <span className="text-slate-400 mr-1">Actions for selection:</span>
+                    <button
+                      className="rounded-md border border-slate-700 px-2 py-1 hover:bg-slate-800"
+                      onClick={() => askFor("rephrase")}
+                      disabled={sending}
+                    >
+                      Rephrase
+                    </button>
+                    <button
+                      className="rounded-md border border-slate-700 px-2 py-1 hover:bg-slate-800"
+                      onClick={() => askFor("shorten")}
+                      disabled={sending}
+                    >
+                      Shorten
+                    </button>
+                    <button
+                      className="rounded-md border border-slate-700 px-2 py-1 hover:bg-slate-800"
+                      onClick={() => askFor("quantify")}
+                      disabled={sending}
+                    >
+                      Quantify
+                    </button>
+                    <button
+                      className="rounded-md border border-slate-700 px-2 py-1 hover:bg-slate-800"
+                      onClick={() => askFor("star")}
+                      disabled={sending}
+                    >
+                      Make STAR
+                    </button>
+                    <button
+                      className="rounded-md border border-amber-500/60 text-amber-300 px-2 py-1 hover:bg-slate-800"
+                      onClick={askMetricsHelper}
+                      disabled={sending}
+                    >
+                      Metrics helper
+                    </button>
                   </div>
                 )}
+
+                {/* Suggestion box */}
                 {suggestion && (
                   <div className="px-4 py-3 border-t border-slate-800 bg-slate-900/50">
                     <div className="text-xs text-slate-400 mb-1">Suggestion:</div>
-                    <div className="text-sm mb-2">{suggestion}</div>
-                    <div className="flex gap-2">
-                      <button className="rounded-md bg-indigo-600 px-3 py-1.5 text-white" onClick={() => replaceSelection(suggestion!)}>Replace selection</button>
-                      <button className="rounded-md border border-slate-700 px-3 py-1.5" onClick={() => setSuggestion(null)}>Dismiss</button>
+                    <div className="text-sm mb-3 whitespace-pre-line">{suggestion}</div>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        className="rounded-md bg-indigo-600 px-3 py-1.5 text-white text-xs"
+                        onClick={() => replaceSelection(suggestion!)}
+                      >
+                        Replace selection
+                      </button>
+                      <button
+                        className="rounded-md border border-slate-700 px-3 py-1.5 text-xs"
+                        onClick={() => insertSuggestionBelow(suggestion!)}
+                      >
+                        Insert below selection
+                      </button>
+                      <button
+                        className="rounded-md border border-slate-700 px-3 py-1.5 text-xs"
+                        onClick={() => setSuggestion(null)}
+                      >
+                        Dismiss
+                      </button>
                     </div>
                   </div>
                 )}
+
+                {/* Metrics ideas box */}
+                {metricsIdeas && (
+                  <div className="px-4 py-3 border-t border-slate-800 bg-slate-900/40">
+                    <div className="text-xs text-amber-300 mb-1">Metrics helper ideas:</div>
+                    <div className="text-sm mb-2 whitespace-pre-line">{metricsIdeas}</div>
+                    <p className="text-[11px] text-slate-400">
+                      Tip: Use these numbers (or placeholders like X%, N, Y) when editing the bullet above.
+                    </p>
+                    <div className="mt-2">
+                      <button
+                        className="rounded-md border border-slate-700 px-3 py-1.5 text-xs"
+                        onClick={() => setMetricsIdeas(null)}
+                      >
+                        Hide metrics ideas
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 <footer className="px-4 py-2 border-t border-slate-800 text-xs text-slate-400 flex justify-between">
                   <span>{resume.length} chars</span>
-                  <span>Tip: ⌘/Ctrl + S to snapshot</span>
+                  <span>Tip: Select a bullet to see AI actions • ⌘/Ctrl + S to snapshot</span>
                 </footer>
               </section>
 
               {/* Chat Panel */}
               <section className="rounded-2xl border border-slate-800 bg-slate-900/60 overflow-hidden flex flex-col shadow-sm">
                 <header className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
-                  <h2 className="font-medium">Assistant Chat</h2>
-                  <span className="text-xs text-slate-400">Enter to send • Shift+Enter for newline</span>
+                  <h3 className="font-medium">Assistant Chat</h3>
+                  <span className="text-xs text-slate-400">
+                    Enter to send • Shift+Enter for newline
+                  </span>
                 </header>
 
                 <div className="flex-1 overflow-y-auto p-4 space-y-3">
                   {chat.length === 0 && (
-                    <p className="text-slate-400 text-sm">Ask for phrasing, impact verbs, or tailoring to a JD.</p>
+                    <p className="text-slate-400 text-sm">
+                      Ask for phrasing, impact verbs, or tailoring to a JD.
+                    </p>
                   )}
                   {chat.map((m, i) => (
                     <div key={i} className={`max-w-[85%] ${m.role === "user" ? "ml-auto" : ""}`}>
-                      <div className={`px-3 py-2 rounded-xl text-sm border ${m.role === "user"
-                        ? "bg-indigo-500/10 border-indigo-400/30"
-                        : "bg-slate-800/60 border-slate-700/60"}`}>
+                      <div
+                        className={`px-3 py-2 rounded-xl text-sm border ${
+                          m.role === "user"
+                            ? "bg-indigo-500/10 border-indigo-400/30"
+                            : "bg-slate-800/60 border-slate-700/60"
+                        }`}
+                      >
                         {m.text}
                       </div>
                     </div>
@@ -404,7 +638,7 @@ export default function Builder() {
                 const start = el.selectionStart ?? resume.length;
                 const before = resume.slice(0, start);
                 const after = resume.slice(start);
-                const next = `${before}${(before && !before.endsWith("\n")) ? "\n" : ""}${b}\n${after}`;
+                const next = `${before}${before && !before.endsWith("\n") ? "\n" : ""}${b}\n${after}`;
                 setResume(next);
                 debouncedSave(next);
               } else {
