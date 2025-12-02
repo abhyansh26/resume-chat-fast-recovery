@@ -1,5 +1,5 @@
 // web/src/pages/Builder.tsx
-import { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { getSession, saveResume, sendChat, snapshotSession } from "../api";
 import BulletWizard from "../components/BulletWizard";
@@ -47,7 +47,7 @@ export default function Builder() {
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [snapshotState, setSnapshotState] = useState<"idle" | "saving" | "saved" | "error">("idle");
 
-  // chat input
+  // chat / AI calls
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
 
@@ -55,6 +55,7 @@ export default function Builder() {
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
   const [sel, setSel] = useState<{ start: number; end: number; text: string } | null>(null);
   const [suggestion, setSuggestion] = useState<string | null>(null);
+  const [metricsIdeas, setMetricsIdeas] = useState<string | null>(null);
   const [showWizard, setShowWizard] = useState(false);
 
   const toast = useToast();
@@ -71,8 +72,7 @@ export default function Builder() {
           setResume(data.resume || "");
           setChat(data.chat || []);
           setLoadErr(null);
-          // For now, we don't attempt to parse old resumes into ResumeModel.
-          // resumeModel stays null until a template is applied or we add parsing later.
+          // For now, resumeModel stays null until a template is applied.
         }
       } catch (e: any) {
         if (!ignore) setLoadErr(e?.message || "Failed to load session");
@@ -113,6 +113,9 @@ export default function Builder() {
     const end = el.selectionEnd ?? 0;
     const text = (resume || "").slice(start, end);
     setSel(text && start !== end ? { start, end, text } : null);
+    // When user changes selection, clear previous suggestions/metrics
+    setSuggestion(null);
+    setMetricsIdeas(null);
   }
 
   function replaceSelection(text: string) {
@@ -124,6 +127,43 @@ export default function Builder() {
     debouncedSave(next);
     setSel(null);
     setSuggestion(null);
+    setMetricsIdeas(null);
+  }
+
+  // Insert suggestion as a new bullet below the current selection
+  function insertSuggestionBelow(text: string) {
+    if (!sel) return;
+    const full = resume;
+    const newlineIndex = full.indexOf("\n", sel.end);
+
+    let before: string;
+    let after: string;
+
+    if (newlineIndex === -1) {
+      // No newline after selection → append at end
+      before = full.endsWith("\n") ? full : full + "\n";
+      after = "";
+    } else {
+      before = full.slice(0, newlineIndex + 1);
+      after = full.slice(newlineIndex + 1);
+    }
+
+    // Try to preserve bullet prefix if present
+    const trimmed = sel.text.trimStart();
+    let prefix = "- ";
+    if (trimmed.startsWith("- ")) prefix = "- ";
+    else if (trimmed.startsWith("• ")) prefix = "• ";
+    else if (trimmed.startsWith("* ")) prefix = "* ";
+
+    const newLine = `${prefix}${text}`;
+    const next = `${before}${newLine}\n${after}`;
+
+    setResume(next);
+    debouncedSave(next);
+    setSel(null);
+    setSuggestion(null);
+    setMetricsIdeas(null);
+    toast.show("Inserted below");
   }
 
   // ---- Send chat (assistant box) ----
@@ -153,22 +193,76 @@ export default function Builder() {
 
   // ---- Quick Actions on selected text ----
   async function askFor(kind: "rephrase" | "shorten" | "quantify" | "star") {
-    if (!sel?.text) return;
+    if (!sel?.text || sending) return;
+
     const instructions: Record<string, string> = {
-      rephrase: "Rephrase this resume bullet professionally and concisely:",
-      shorten: "Shorten this resume bullet, keeping impact and specifics:",
+      rephrase:
+        "Rephrase this resume bullet to be more concise, professional, and impact-focused. Keep it one bullet:",
+      shorten:
+        "Shorten this resume bullet while keeping the key action, tools, and impact. Keep it one bullet:",
       quantify:
-        "Rewrite this bullet to include measurable impact (numbers or %), ask clarifying metrics if needed:",
-      star: "Rewrite this as a STAR-format bullet (Situation, Task, Action, Result) in one concise line:",
+        "Rewrite this resume bullet to include realistic, measurable impact using numbers or percentages. " +
+        "If exact numbers are unknown, you may use placeholders like X%, Y, N as a hint:",
+      star:
+        "Rewrite this resume bullet in STAR format (Situation, Task, Action, Result) but keep it in one concise bullet line:",
     };
+
     setSending(true);
     try {
-      const res = await sendChat(sessionId, `${instructions[kind]}\n\n${sel.text}`);
+      const prompt = `${instructions[kind]}\n\nCurrent bullet:\n${sel.text}`;
+      const res = await sendChat(sessionId, prompt);
       const reply = res.assistantMessage ?? "";
       setSuggestion(reply || null);
-      // also add to chat stream
-      setChat((c) => [...c, { role: "user", text: `${kind.toUpperCase()} on selection`, ts: Date.now() }]);
-      setChat((c) => [...c, { role: "assistant", text: reply || "(no suggestion)", ts: Date.now() }]);
+      setMetricsIdeas(null); // clear metrics to avoid confusion
+
+      // Also add to chat stream for traceability
+      setChat((c) => [
+        ...c,
+        {
+          role: "user",
+          text: `[${kind.toUpperCase()}] on selection:\n${sel.text}`,
+          ts: Date.now(),
+        },
+        {
+          role: "assistant",
+          text: reply || "(no suggestion)",
+          ts: Date.now(),
+        },
+      ]);
+    } finally {
+      setSending(false);
+    }
+  }
+
+  // ---- Metrics helper for a selected bullet ----
+  async function askMetricsHelper() {
+    if (!sel?.text || sending) return;
+    setSending(true);
+    try {
+      const prompt =
+        "You are helping improve a resume bullet by adding measurable impact. " +
+        "Given this bullet, suggest 3–5 specific metrics I could use, such as X%, N users, $Y saved, or time reductions. " +
+        "If exact numbers are unknown, use placeholders like X%, N, or Y.\n\n" +
+        "Bullet:\n" +
+        sel.text;
+
+      const res = await sendChat(sessionId, prompt);
+      const reply = res.assistantMessage ?? "";
+      setMetricsIdeas(reply || null);
+
+      setChat((c) => [
+        ...c,
+        {
+          role: "user",
+          text: `[METRICS HELPER] for selection:\n${sel.text}`,
+          ts: Date.now(),
+        },
+        {
+          role: "assistant",
+          text: reply || "(no metrics ideas)",
+          ts: Date.now(),
+        },
+      ]);
     } finally {
       setSending(false);
     }
@@ -209,6 +303,9 @@ export default function Builder() {
     setResume("");
     setResumeModel(null);
     setChat([]);
+    setSel(null);
+    setSuggestion(null);
+    setMetricsIdeas(null);
     toast.show("New session started");
   }
   function exportResume() {
@@ -346,12 +443,15 @@ export default function Builder() {
                   <span className="text-xs text-slate-400">Autosaves while you type</span>
                 </header>
 
-                {/* Template picker (now sets both text and structured model) */}
+                {/* Template picker */}
                 <TemplatePicker
                   onApplyTemplate={(tmplText, tmplModel) => {
                     setResume(tmplText);
                     setResumeModel(tmplModel);
                     debouncedSave(tmplText);
+                    setSel(null);
+                    setSuggestion(null);
+                    setMetricsIdeas(null);
                     toast.show("Template applied");
                   }}
                 />
@@ -365,49 +465,69 @@ export default function Builder() {
                   value={resume}
                   onChange={(e) => onResumeChange(e.target.value)}
                 />
-                {/* Quick Actions */}
+
+                {/* Quick Actions (AI on selection) */}
                 {sel && (
                   <div className="px-4 py-2 border-t border-slate-800 text-sm flex flex-wrap items-center gap-2">
-                    <span className="text-slate-400">Actions for selection:</span>
+                    <span className="text-slate-400 mr-1">Actions for selection:</span>
                     <button
                       className="rounded-md border border-slate-700 px-2 py-1 hover:bg-slate-800"
                       onClick={() => askFor("rephrase")}
+                      disabled={sending}
                     >
                       Rephrase
                     </button>
                     <button
                       className="rounded-md border border-slate-700 px-2 py-1 hover:bg-slate-800"
                       onClick={() => askFor("shorten")}
+                      disabled={sending}
                     >
                       Shorten
                     </button>
                     <button
                       className="rounded-md border border-slate-700 px-2 py-1 hover:bg-slate-800"
                       onClick={() => askFor("quantify")}
+                      disabled={sending}
                     >
                       Quantify
                     </button>
                     <button
                       className="rounded-md border border-slate-700 px-2 py-1 hover:bg-slate-800"
                       onClick={() => askFor("star")}
+                      disabled={sending}
                     >
                       Make STAR
                     </button>
+                    <button
+                      className="rounded-md border border-amber-500/60 text-amber-300 px-2 py-1 hover:bg-slate-800"
+                      onClick={askMetricsHelper}
+                      disabled={sending}
+                    >
+                      Metrics helper
+                    </button>
                   </div>
                 )}
+
+                {/* Suggestion box */}
                 {suggestion && (
                   <div className="px-4 py-3 border-t border-slate-800 bg-slate-900/50">
                     <div className="text-xs text-slate-400 mb-1">Suggestion:</div>
-                    <div className="text-sm mb-2">{suggestion}</div>
-                    <div className="flex gap-2">
+                    <div className="text-sm mb-3 whitespace-pre-line">{suggestion}</div>
+                    <div className="flex flex-wrap gap-2">
                       <button
-                        className="rounded-md bg-indigo-600 px-3 py-1.5 text-white"
+                        className="rounded-md bg-indigo-600 px-3 py-1.5 text-white text-xs"
                         onClick={() => replaceSelection(suggestion!)}
                       >
                         Replace selection
                       </button>
                       <button
-                        className="rounded-md border border-slate-700 px-3 py-1.5"
+                        className="rounded-md border border-slate-700 px-3 py-1.5 text-xs"
+                        onClick={() => insertSuggestionBelow(suggestion!)}
+                      >
+                        Insert below selection
+                      </button>
+                      <button
+                        className="rounded-md border border-slate-700 px-3 py-1.5 text-xs"
                         onClick={() => setSuggestion(null)}
                       >
                         Dismiss
@@ -415,9 +535,29 @@ export default function Builder() {
                     </div>
                   </div>
                 )}
+
+                {/* Metrics ideas box */}
+                {metricsIdeas && (
+                  <div className="px-4 py-3 border-t border-slate-800 bg-slate-900/40">
+                    <div className="text-xs text-amber-300 mb-1">Metrics helper ideas:</div>
+                    <div className="text-sm mb-2 whitespace-pre-line">{metricsIdeas}</div>
+                    <p className="text-[11px] text-slate-400">
+                      Tip: Use these numbers (or placeholders like X%, N, Y) when editing the bullet above.
+                    </p>
+                    <div className="mt-2">
+                      <button
+                        className="rounded-md border border-slate-700 px-3 py-1.5 text-xs"
+                        onClick={() => setMetricsIdeas(null)}
+                      >
+                        Hide metrics ideas
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 <footer className="px-4 py-2 border-t border-slate-800 text-xs text-slate-400 flex justify-between">
                   <span>{resume.length} chars</span>
-                  <span>Tip: ⌘/Ctrl + S to snapshot</span>
+                  <span>Tip: Select a bullet to see AI actions • ⌘/Ctrl + S to snapshot</span>
                 </footer>
               </section>
 
