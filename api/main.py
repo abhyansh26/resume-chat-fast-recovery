@@ -1,7 +1,5 @@
 # main.py
-import os
-import json
-import time
+import os, json, time
 from typing import List, Optional
 
 from fastapi import FastAPI
@@ -22,39 +20,14 @@ GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
-ALLOWED_ORIGINS_ENV = os.getenv("ALLOWED_ORIGINS", "")
-
 # ---------------- App ----------------
 app = FastAPI(title="Resume Chat API")
 
-# --- CORS: keep it explicit and simple for class project ---
-
-DEFAULT_ALLOWED_ORIGINS = [
-    # Vite dev
-    "http://localhost:5173",
-    "http://localhost:5174",
-    # Vite preview
-    "http://localhost:4173",
-    "http://localhost:4174",
-    # CloudFront frontend
-    "https://dvxexndtccpr9.cloudfront.net",
-]
-
-if ALLOWED_ORIGINS_ENV:
-    allowed_origins = [o.strip() for o in ALLOWED_ORIGINS_ENV.split(",") if o.strip()]
-    # Make sure our defaults are also present
-    for origin in DEFAULT_ALLOWED_ORIGINS:
-        if origin not in allowed_origins:
-            allowed_origins.append(origin)
-else:
-    allowed_origins = DEFAULT_ALLOWED_ORIGINS
-
-# This will show up in CloudWatch logs, useful for debugging
-print("CORS allowed origins at startup:", allowed_origins)
-
+# CORS: allow localhost (any port) + your CloudFront domain
+# This avoids env confusion and makes CORS very robust.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
+    allow_origin_regex=r"^https?://(localhost(:\d+)?|dvxexndtccpr9\.cloudfront\.net)$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -267,16 +240,6 @@ def llm_status():
     }
 
 
-@app.get("/debug/cors-config")
-def cors_config():
-    # helper to see what CORS thinks at runtime
-    return {
-        "LOCAL_DEV": LOCAL_DEV,
-        "ALLOWED_ORIGINS_ENV": ALLOWED_ORIGINS_ENV,
-        "allowed_origins": allowed_origins,
-    }
-
-
 @app.get("/session/{sessionId}")
 def get_session(sessionId: str):
     resume = get_resume(sessionId)
@@ -310,9 +273,7 @@ def post_chat(req: ChatRequest):
 
 @app.post("/snapshot/{sessionId}")
 def snapshot(sessionId: str):
-    payload = SessionPayload(
-        resume=get_resume(sessionId) or "", chat=list_chat(sessionId)
-    )
+    payload = SessionPayload(resume=get_resume(sessionId) or "", chat=list_chat(sessionId))
     write_snapshot(sessionId, payload)
     return {"snapshotted": True, "countMessages": len(payload.chat)}
 
