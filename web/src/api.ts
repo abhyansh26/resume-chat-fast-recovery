@@ -1,70 +1,61 @@
 // web/src/api.ts
 
-// 🔹 Determine the API base URL to call.
-// Priority:
-// 1. VITE_API_BASE (what we'll use going forward)
-// 2. VITE_API_BASE_URL (your existing variable)
-// 3. Hard-coded API Gateway URL as a fallback
-const RAW_API_BASE =
+const API_BASE =
   import.meta.env.VITE_API_BASE ||
   import.meta.env.VITE_API_BASE_URL ||
-  "https://xllcqf6c7l.execute-api.us-east-1.amazonaws.com";
+  "http://127.0.0.1:8000";
 
-// Remove any trailing slashes ("/")
-const API_BASE = RAW_API_BASE.replace(/\/+$/, "");
+// Debug log so we can see what the frontend thinks the API is
+console.log("[API] Using base URL:", API_BASE);
 
-// Small helper: check for HTTP error codes and parse JSON
-async function handleJson(r: Response) {
-  if (!r.ok) {
-    // Try to read the error text for debugging
-    let text = "";
+if (!API_BASE) {
+  console.warn(
+    "API_BASE is not configured; falling back to http://127.0.0.1:8000"
+  );
+}
+
+async function doFetch(path: string, options?: RequestInit) {
+  const res = await fetch(`${API_BASE}${path}`, {
+    credentials: "include",
+    ...options,
+  });
+
+  if (!res.ok) {
+    // try to parse JSON error, else throw generic
+    let msg = `Request failed: ${res.status} ${res.statusText}`;
     try {
-      text = await r.text();
+      const data = await res.json();
+      if (data?.message) msg = data.message;
     } catch {
-      // ignore
+      // ignore JSON parse errors
     }
-    console.error("API error:", r.status, r.statusText, text);
-    throw new Error(`${r.status} ${r.statusText}`);
+    throw new Error(msg);
   }
-  return r.json();
+  return res.json();
 }
 
-// 🔹 GET /session/{sessionId}
 export async function getSession(sessionId: string) {
-  const r = await fetch(`${API_BASE}/session/${encodeURIComponent(sessionId)}`, {
-    credentials: "omit",
-  });
-  return handleJson(r);
+  return doFetch(`/session/${encodeURIComponent(sessionId)}`);
 }
 
-// 🔹 PUT /resume/{sessionId}   body: { text }
-export async function saveResume(sessionId: string, resumeText: string) {
-  const r = await fetch(`${API_BASE}/resume/${encodeURIComponent(sessionId)}`, {
+export async function saveResume(sessionId: string, text: string) {
+  return doFetch(`/resume/${encodeURIComponent(sessionId)}`, {
     method: "PUT",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ text: resumeText }),
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
   });
-  return handleJson(r);
 }
 
-// 🔹 POST /chat   body: { sessionId, message }
 export async function sendChat(sessionId: string, message: string) {
-  const r = await fetch(`${API_BASE}/chat`, {
+  return doFetch(`/chat`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ sessionId, message }),
   });
-  return handleJson(r);
 }
 
-// 🔹 POST /snapshot/{sessionId}
 export async function snapshotSession(sessionId: string) {
-  const r = await fetch(
-    `${API_BASE}/snapshot/${encodeURIComponent(sessionId)}`,
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-    }
-  );
-  return handleJson(r);
+  return doFetch(`/snapshot/${encodeURIComponent(sessionId)}`, {
+    method: "POST",
+  });
 }

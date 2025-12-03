@@ -1,28 +1,40 @@
-# python
+# --- Python / backend ---
+
+# Local virtualenvs
+.venv/
 api/.venv/
+
+# Bytecode / cache
 __pycache__/
 *.pyc
 
-# node
-web/node_modules/
-web/dist/
-
-# env files
-*.env
-
-# OS/editor junk
-.DS_Store
-
-# local virtualenv at repo root
-.venv/
-
-# accidental temp files
-api/0
+# Lambda build artifacts
 api/build/
 api/deploy.zip
 deploy.zip
-web/.env*
-# Local env files (do NOT commit)
-api/.env*
-web/.env*
 
+# --- Node / frontend ---
+
+web/node_modules/
+web/dist/
+
+# --- Env files ---
+
+# Backend envs - do NOT commit
+api/.env
+api/.env.local
+api/.env.development
+api/.env.test
+
+# Frontend envs - do NOT commit
+web/.env
+web/.env.local
+web/.env.development
+web/.env.test
+
+# Allow production env for frontend (safe, only base URL)
+!web/.env.production
+
+# --- OS/editor junk ---
+
+.DS_Store
