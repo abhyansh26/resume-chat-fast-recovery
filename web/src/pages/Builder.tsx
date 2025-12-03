@@ -38,14 +38,20 @@ export default function Builder() {
   // ---- App state ----
   const [resume, setResume] = useState("");
   const [resumeModel, setResumeModel] = useState<ResumeModel | null>(null);
-  const [chat, setChat] = useState<{ role: "user" | "assistant"; text: string; ts?: number }[]>([]);
+  const [chat, setChat] = useState<
+    { role: "user" | "assistant"; text: string; ts?: number }[]
+  >([]);
 
   // Load state
   const [loading, setLoading] = useState(true);
   const [loadErr, setLoadErr] = useState<string | null>(null);
 
-  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
-  const [snapshotState, setSnapshotState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">(
+    "idle"
+  );
+  const [snapshotState, setSnapshotState] = useState<
+    "idle" | "saving" | "saved" | "error"
+  >("idle");
 
   // chat / AI calls
   const [input, setInput] = useState("");
@@ -53,7 +59,9 @@ export default function Builder() {
 
   // resume helpers
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
-  const [sel, setSel] = useState<{ start: number; end: number; text: string } | null>(null);
+  const [sel, setSel] = useState<{ start: number; end: number; text: string } | null>(
+    null
+  );
   const [suggestion, setSuggestion] = useState<string | null>(null);
   const [metricsIdeas, setMetricsIdeas] = useState<string | null>(null);
   const [showWizard, setShowWizard] = useState(false);
@@ -206,7 +214,10 @@ export default function Builder() {
 
   // ---- Quick Actions on selected text ----
   async function askFor(kind: "rephrase" | "shorten" | "quantify" | "star") {
-    const map: Record<typeof kind, { label: string; instructions: string }> = {
+    const map: Record<
+      "rephrase" | "shorten" | "quantify" | "star",
+      { label: string; instructions: string }
+    > = {
       rephrase: {
         label: "REPHRASE",
         instructions:
@@ -279,7 +290,7 @@ export default function Builder() {
     setChat((c) => [...c, { role: "user", text: raw, ts: Date.now() }]);
     setInput("");
 
-    // But what we actually send to the backend includes the full resume as context
+    // What we actually send includes the full resume as context
     const prompt =
       "You are a resume assistant. Use the full resume context to answer.\n\n" +
       `Full resume:\n${resume}\n\n` +
@@ -401,9 +412,7 @@ export default function Builder() {
               <h2 className="text-lg font-semibold">Resume Builder</h2>
               <p className="text-xs text-slate-400">
                 Session:{" "}
-                <span className="font-mono">
-                  {sessionId.slice(0, 8)}…
-                </span>
+                <span className="font-mono">{sessionId.slice(0, 8)}…</span>
                 <button
                   onClick={copySession}
                   className="ml-2 text-indigo-300 hover:text-indigo-200 underline underline-offset-2"
@@ -479,7 +488,9 @@ export default function Builder() {
               <section className="rounded-2xl border border-slate-800 bg-slate-900/60 overflow-hidden flex flex-col shadow-sm">
                 <header className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
                   <h3 className="font-medium">Resume Editor</h3>
-                  <span className="text-xs text-slate-400">Autosaves while you type</span>
+                  <span className="text-xs text-slate-400">
+                    Autosaves while you type
+                  </span>
                 </header>
 
                 {/* Template picker */}
@@ -503,12 +514,80 @@ export default function Builder() {
                   onChange={(e) => onResumeChange(e.target.value)}
                 />
 
-                {/* Quick Actions (AI on selection) */}
-                {sel && (
-                  <div className="px-4 py-2 border-t border-slate-800 text-sm flex flex-wrap items-center gap-2">
-                    <span className="text-slate-400 mr-1">Actions for selection:</span>
+                {/* Suggestion box (still docked under editor, since it's literally editing the resume) */}
+                {suggestion && (
+                  <div className="px-4 py-3 border-t border-slate-800 bg-slate-900/50">
+                    <div className="text-xs text-slate-400 mb-1">Suggestion:</div>
+                    <div className="text-sm mb-3 whitespace-pre-line">{suggestion}</div>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        className="rounded-md bg-indigo-600 px-3 py-1.5 text-white text-xs"
+                        onClick={() => replaceSelection(suggestion!)}
+                      >
+                        Replace selection
+                      </button>
+                      <button
+                        className="rounded-md border border-slate-700 px-3 py-1.5 text-xs"
+                        onClick={() => insertSuggestionBelow(suggestion!)}
+                      >
+                        Insert below selection
+                      </button>
+                      <button
+                        className="rounded-md border border-slate-700 px-3 py-1.5 text-xs"
+                        onClick={() => setSuggestion(null)}
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                  </div>
+                )}
 
-                    {/* ↔ Send selection into chat box */}
+                {/* Metrics ideas box (also related to editor) */}
+                {metricsIdeas && (
+                  <div className="px-4 py-3 border-t border-slate-800 bg-slate-900/40">
+                    <div className="text-xs text-amber-300 mb-1">
+                      Metrics helper ideas:
+                    </div>
+                    <div className="text-sm mb-2 whitespace-pre-line">
+                      {metricsIdeas}
+                    </div>
+                    <p className="text-[11px] text-slate-400">
+                      Tip: Use these numbers (or placeholders like X%, N, Y) when editing
+                      the bullet above.
+                    </p>
+                    <div className="mt-2">
+                      <button
+                        className="rounded-md border border-slate-700 px-3 py-1.5 text-xs"
+                        onClick={() => setMetricsIdeas(null)}
+                      >
+                        Hide metrics ideas
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                <footer className="px-4 py-2 border-t border-slate-800 text-xs text-slate-400 flex justify-between">
+                  <span>{resume.length} chars</span>
+                  <span>Tip: Select a bullet to see helper tools on the right.</span>
+                </footer>
+              </section>
+
+              {/* Chat Panel */}
+              <section className="rounded-2xl border border-slate-800 bg-slate-900/60 overflow-hidden flex flex-col shadow-sm">
+                <header className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
+                  <h3 className="font-medium">Assistant Chat</h3>
+                  <span className="text-xs text-slate-400">
+                    Enter to send • Shift+Enter for newline
+                  </span>
+                </header>
+
+                {/* Selection helper strip lives on the ASSISTANT side */}
+                {sel && (
+                  <div className="px-4 py-2 border-b border-slate-800 bg-slate-900/80 text-sm flex flex-wrap items-center gap-2">
+                    <span className="text-slate-400 mr-1">
+                      On selected text ({sel.text.slice(0, 40)}
+                      {sel.text.length > 40 ? "…" : ""}):
+                    </span>
                     <button
                       className="rounded-md border border-indigo-400/70 text-indigo-200 px-2 py-1 hover:bg-slate-800"
                       onClick={() => setInput(sel.text.trim())}
@@ -516,9 +595,7 @@ export default function Builder() {
                     >
                       ↔ Send selection
                     </button>
-
                     <span className="mx-2 h-5 border-l border-slate-700" />
-
                     <button
                       className="rounded-md border border-slate-700 px-2 py-1 hover:bg-slate-800"
                       onClick={() => askFor("rephrase")}
@@ -557,78 +634,19 @@ export default function Builder() {
                   </div>
                 )}
 
-                {/* Suggestion box */}
-                {suggestion && (
-                  <div className="px-4 py-3 border-t border-slate-800 bg-slate-900/50">
-                    <div className="text-xs text-slate-400 mb-1">Suggestion:</div>
-                    <div className="text-sm mb-3 whitespace-pre-line">{suggestion}</div>
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        className="rounded-md bg-indigo-600 px-3 py-1.5 text-white text-xs"
-                        onClick={() => replaceSelection(suggestion!)}
-                      >
-                        Replace selection
-                      </button>
-                      <button
-                        className="rounded-md border border-slate-700 px-3 py-1.5 text-xs"
-                        onClick={() => insertSuggestionBelow(suggestion!)}
-                      >
-                        Insert below selection
-                      </button>
-                      <button
-                        className="rounded-md border border-slate-700 px-3 py-1.5 text-xs"
-                        onClick={() => setSuggestion(null)}
-                      >
-                        Dismiss
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {/* Metrics ideas box */}
-                {metricsIdeas && (
-                  <div className="px-4 py-3 border-t border-slate-800 bg-slate-900/40">
-                    <div className="text-xs text-amber-300 mb-1">Metrics helper ideas:</div>
-                    <div className="text-sm mb-2 whitespace-pre-line">{metricsIdeas}</div>
-                    <p className="text-[11px] text-slate-400">
-                      Tip: Use these numbers (or placeholders like X%, N, Y) when editing the bullet above.
-                    </p>
-                    <div className="mt-2">
-                      <button
-                        className="rounded-md border border-slate-700 px-3 py-1.5 text-xs"
-                        onClick={() => setMetricsIdeas(null)}
-                      >
-                        Hide metrics ideas
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                <footer className="px-4 py-2 border-t border-slate-800 text-xs text-slate-400 flex justify-between">
-                  <span>{resume.length} chars</span>
-                  <span>Tip: Select a bullet to see AI actions • ⌘/Ctrl + S to snapshot</span>
-                </footer>
-              </section>
-
-              {/* Chat Panel */}
-              <section className="rounded-2xl border border-slate-800 bg-slate-900/60 overflow-hidden flex flex-col shadow-sm">
-                <header className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
-                  <h3 className="font-medium">Assistant Chat</h3>
-                  <span className="text-xs text-slate-400">
-                    Enter to send • Shift+Enter for newline
-                  </span>
-                </header>
-
                 {/* Scrollable chat area */}
                 <div className="flex-1 overflow-y-auto p-4 space-y-3 max-h-[55vh] md:max-h-[60vh]">
                   {chat.length === 0 && (
                     <p className="text-slate-400 text-sm">
-                      Ask for phrasing help, impact verbs, or tailoring to a JD. The assistant will see your full resume
-                      every time.
+                      Ask for phrasing help, impact verbs, or tailoring to a JD. The
+                      assistant always sees your full resume plus this message.
                     </p>
                   )}
                   {chat.map((m, i) => (
-                    <div key={i} className={`max-w-[85%] ${m.role === "user" ? "ml-auto" : ""}`}>
+                    <div
+                      key={i}
+                      className={`max-w-[85%] ${m.role === "user" ? "ml-auto" : ""}`}
+                    >
                       <div
                         className={`px-3 py-2 rounded-xl text-sm border ${
                           m.role === "user"
@@ -691,7 +709,9 @@ export default function Builder() {
               const start = el.selectionStart ?? resume.length;
               const before = resume.slice(0, start);
               const after = resume.slice(start);
-              const next = `${before}${before && !before.endsWith("\n") ? "\n" : ""}${b}\n${after}`;
+              const next = `${before}${
+                before && !before.endsWith("\n") ? "\n" : ""
+              }${b}\n${after}`;
               setResume(next);
               debouncedSave(next);
             } else {
