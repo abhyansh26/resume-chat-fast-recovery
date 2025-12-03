@@ -5,7 +5,6 @@ import { getSession, saveResume, sendChat, snapshotSession } from "../api";
 import BulletWizard from "../components/BulletWizard";
 import JDPanel from "../components/JDPanel";
 import TemplatePicker from "../components/TemplatePicker";
-import { SelectionAssistant } from "../components/SelectionAssistant";
 import type { ResumeModel } from "../types/resumeModel";
 
 function useDebouncedCallback<T extends (...args: any[]) => any>(fn: T, delay = 700) {
@@ -554,7 +553,7 @@ export default function Builder() {
 
                 <footer className="px-4 py-2 border-t border-slate-800 text-xs text-slate-400 flex justify-between">
                   <span>{resume.length} chars</span>
-                  <span>Tip: Select a bullet to open the assistant card • ⌘/Ctrl + S to snapshot</span>
+                  <span>Tip: Select a bullet and use tools from the chat panel • ⌘/Ctrl + S to snapshot</span>
                 </footer>
               </section>
 
@@ -566,6 +565,71 @@ export default function Builder() {
                     Enter to send • Shift+Enter for newline
                   </span>
                 </header>
+
+                {/* Selection action row INSIDE chat card */}
+                <div className="px-4 py-2 border-b border-slate-800 text-[11px] flex flex-wrap items-center gap-2">
+                  {sel ? (
+                    <>
+                      <span className="text-slate-400">
+                        Selection:{" "}
+                        <span className="text-slate-200">
+                          “{sel.text.length > 40 ? sel.text.slice(0, 37) + "…" : sel.text}”
+                        </span>
+                      </span>
+                      <button
+                        className="rounded-full border border-indigo-400/70 px-2 py-1 text-[11px] text-indigo-100 hover:bg-indigo-500/20"
+                        onClick={() => setInput(sel.text.trim())}
+                      >
+                        ↔ Send to chat
+                      </button>
+                      <button
+                        className="rounded-full border border-slate-600 px-2 py-1 text-[11px] hover:bg-slate-800"
+                        onClick={() => askFor("rephrase")}
+                        disabled={sending}
+                      >
+                        Rephrase
+                      </button>
+                      <button
+                        className="rounded-full border border-slate-600 px-2 py-1 text-[11px] hover:bg-slate-800"
+                        onClick={() => askFor("shorten")}
+                        disabled={sending}
+                      >
+                        Shorten
+                      </button>
+                      <button
+                        className="rounded-full border border-emerald-500/60 px-2 py-1 text-[11px] text-emerald-200 hover:bg-emerald-500/20"
+                        onClick={() => askFor("quantify")}
+                        disabled={sending}
+                      >
+                        Quantify
+                      </button>
+                      <button
+                        className="rounded-full border border-indigo-500/70 px-2 py-1 text-[11px] text-indigo-100 hover:bg-indigo-500/20"
+                        onClick={() => askFor("star")}
+                        disabled={sending}
+                      >
+                        Make STAR
+                      </button>
+                      <button
+                        className="rounded-full border border-amber-500/70 px-2 py-1 text-[11px] text-amber-200 hover:bg-amber-500/20"
+                        onClick={askMetricsHelper}
+                        disabled={sending}
+                      >
+                        Metrics helper
+                      </button>
+                      <button
+                        className="ml-auto text-[10px] text-slate-500 hover:text-slate-200"
+                        onClick={clearSelectionState}
+                      >
+                        Clear
+                      </button>
+                    </>
+                  ) : (
+                    <span className="text-slate-500">
+                      Tip: Select a bullet on the left to unlock quick tools here.
+                    </span>
+                  )}
+                </div>
 
                 {/* Scrollable chat area */}
                 <div className="flex-1 overflow-y-auto p-4 space-y-3 max-h-[55vh] md:max-h-[60vh]">
@@ -622,21 +686,6 @@ export default function Builder() {
           </>
         )}
       </main>
-
-      {/* Selection assistant floating card */}
-      <SelectionAssistant
-        isOpen={!!sel}
-        selectedText={sel?.text ?? ""}
-        onClose={clearSelectionState}
-        onSendToChat={() => {
-          if (sel?.text) setInput(sel.text.trim());
-        }}
-        onRephrase={() => askFor("rephrase")}
-        onShorten={() => askFor("shorten")}
-        onQuantify={() => askFor("quantify")}
-        onStar={() => askFor("star")}
-        onMetrics={askMetricsHelper}
-      />
 
       {/* Toast */}
       {toast.msg && (
