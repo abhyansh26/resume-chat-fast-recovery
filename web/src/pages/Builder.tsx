@@ -72,7 +72,7 @@ export default function Builder() {
           setResume(data.resume || "");
           setChat(data.chat || []);
           setLoadErr(null);
-          // For now, resumeModel stays null until a template is applied.
+          // resumeModel stays null until a template is applied.
         }
       } catch (e: any) {
         if (!ignore) setLoadErr(e?.message || "Failed to load session");
@@ -118,6 +118,12 @@ export default function Builder() {
     setMetricsIdeas(null);
   }
 
+  function clearSelectionState() {
+    setSel(null);
+    setSuggestion(null);
+    setMetricsIdeas(null);
+  }
+
   function replaceSelection(text: string) {
     if (!sel) return;
     const before = resume.slice(0, sel.start);
@@ -125,9 +131,7 @@ export default function Builder() {
     const next = `${before}${text}${after}`;
     setResume(next);
     debouncedSave(next);
-    setSel(null);
-    setSuggestion(null);
-    setMetricsIdeas(null);
+    clearSelectionState();
   }
 
   // Insert suggestion as a new bullet below the current selection
@@ -160,67 +164,33 @@ export default function Builder() {
 
     setResume(next);
     debouncedSave(next);
-    setSel(null);
-    setSuggestion(null);
-    setMetricsIdeas(null);
+    clearSelectionState();
     toast.show("Inserted below");
   }
 
-  // ---- Send chat (assistant box) ----
-  async function handleSend() {
-    const msg = input.trim();
-    if (!msg || sending) return;
-    setSending(true);
-    try {
-      setChat((c) => [...c, { role: "user", text: msg, ts: Date.now() }]);
-      setInput("");
-      const res = await sendChat(sessionId, msg);
-      const assistantMessage = res.assistantMessage ?? "(no reply)";
-      setChat((c) => [...c, { role: "assistant", text: assistantMessage, ts: Date.now() }]);
-    } catch {
-      setChat((c) => [
-        ...c,
-        {
-          role: "assistant",
-          text: "⚠️ Failed to reach assistant.",
-          ts: Date.now(),
-        },
-      ]);
-    } finally {
-      setSending(false);
-    }
-  }
-
-  // ---- Quick Actions on selected text ----
-  async function askFor(kind: "rephrase" | "shorten" | "quantify" | "star") {
+  // ---- helper: send selection-based prompt (always includes full resume) ----
+  async function sendSelectionPrompt(label: string, instructions: string) {
     if (!sel?.text || sending) return;
-
-    const instructions: Record<string, string> = {
-      rephrase:
-        "Rephrase this resume bullet to be more concise, professional, and impact-focused. Keep it one bullet:",
-      shorten:
-        "Shorten this resume bullet while keeping the key action, tools, and impact. Keep it one bullet:",
-      quantify:
-        "Rewrite this resume bullet to include realistic, measurable impact using numbers or percentages. " +
-        "If exact numbers are unknown, you may use placeholders like X%, Y, N as a hint:",
-      star:
-        "Rewrite this resume bullet in STAR format (Situation, Task, Action, Result) but keep it in one concise bullet line:",
-    };
-
     setSending(true);
     try {
-      const prompt = `${instructions[kind]}\n\nCurrent bullet:\n${sel.text}`;
+      const prompt =
+        `${instructions}\n\n` +
+        `Full resume:\n${resume}\n\n` +
+        `Selected text:\n${sel.text}\n\n` +
+        `Only respond with the improved version or suggestions related to the selected text.`;
+
       const res = await sendChat(sessionId, prompt);
       const reply = res.assistantMessage ?? "";
+
       setSuggestion(reply || null);
       setMetricsIdeas(null); // clear metrics to avoid confusion
 
-      // Also add to chat stream for traceability
+      // Also add a readable trace to chat (shorter for the user)
       setChat((c) => [
         ...c,
         {
           role: "user",
-          text: `[${kind.toUpperCase()}] on selection:\n${sel.text}`,
+          text: `[${label}] on selection:\n${sel.text}`,
           ts: Date.now(),
         },
         {
@@ -234,6 +204,36 @@ export default function Builder() {
     }
   }
 
+  // ---- Quick Actions on selected text ----
+  async function askFor(kind: "rephrase" | "shorten" | "quantify" | "star") {
+    const map: Record<typeof kind, { label: string; instructions: string }> = {
+      rephrase: {
+        label: "REPHRASE",
+        instructions:
+          "Rephrase this resume bullet to be more concise, professional, and impact-focused. Keep it one bullet:",
+      },
+      shorten: {
+        label: "SHORTEN",
+        instructions:
+          "Shorten this resume bullet while keeping the key action, tools, and impact. Keep it one bullet:",
+      },
+      quantify: {
+        label: "QUANTIFY",
+        instructions:
+          "Rewrite this resume bullet to include realistic, measurable impact using numbers or percentages. " +
+          "If exact numbers are unknown, you may use placeholders like X%, Y, or N as a hint:",
+      },
+      star: {
+        label: "STAR",
+        instructions:
+          "Rewrite this resume bullet in STAR format (Situation, Task, Action, Result) but keep it in one concise bullet line:",
+      },
+    };
+
+    const cfg = map[kind];
+    await sendSelectionPrompt(cfg.label, cfg.instructions);
+  }
+
   // ---- Metrics helper for a selected bullet ----
   async function askMetricsHelper() {
     if (!sel?.text || sending) return;
@@ -241,10 +241,10 @@ export default function Builder() {
     try {
       const prompt =
         "You are helping improve a resume bullet by adding measurable impact. " +
-        "Given this bullet, suggest 3–5 specific metrics I could use, such as X%, N users, $Y saved, or time reductions. " +
+        "Given this bullet and the full resume context, suggest 3–5 specific metrics I could use, such as X%, N users, $Y saved, or time reductions. " +
         "If exact numbers are unknown, use placeholders like X%, N, or Y.\n\n" +
-        "Bullet:\n" +
-        sel.text;
+        `Full resume:\n${resume}\n\n` +
+        `Bullet:\n${sel.text}`;
 
       const res = await sendChat(sessionId, prompt);
       const reply = res.assistantMessage ?? "";
@@ -260,6 +260,45 @@ export default function Builder() {
         {
           role: "assistant",
           text: reply || "(no metrics ideas)",
+          ts: Date.now(),
+        },
+      ]);
+    } finally {
+      setSending(false);
+    }
+  }
+
+  // ---- Chat send: ALWAYS include full resume in prompt ----
+  async function handleSend() {
+    const raw = input.trim();
+    if (!raw || sending) return;
+
+    setSending(true);
+
+    // Human-friendly message goes into chat for UI
+    setChat((c) => [...c, { role: "user", text: raw, ts: Date.now() }]);
+    setInput("");
+
+    // But what we actually send to the backend includes the full resume as context
+    const prompt =
+      "You are a resume assistant. Use the full resume context to answer.\n\n" +
+      `Full resume:\n${resume}\n\n` +
+      `User request:\n${raw}\n\n` +
+      "Respond concisely and keep your answer directly useful for editing the resume.";
+
+    try {
+      const res = await sendChat(sessionId, prompt);
+      const assistantMessage = res.assistantMessage ?? "(no reply)";
+      setChat((c) => [
+        ...c,
+        { role: "assistant", text: assistantMessage, ts: Date.now() },
+      ]);
+    } catch {
+      setChat((c) => [
+        ...c,
+        {
+          role: "assistant",
+          text: "⚠️ Failed to reach assistant.",
           ts: Date.now(),
         },
       ]);
@@ -296,6 +335,7 @@ export default function Builder() {
     await navigator.clipboard.writeText(sessionId);
     toast.show("Session ID copied");
   }
+
   function newSession() {
     const s = uuidv4();
     localStorage.setItem("sessionId", s);
@@ -303,11 +343,10 @@ export default function Builder() {
     setResume("");
     setResumeModel(null);
     setChat([]);
-    setSel(null);
-    setSuggestion(null);
-    setMetricsIdeas(null);
+    clearSelectionState();
     toast.show("New session started");
   }
+
   function exportResume() {
     const blob = new Blob([resume || ""], { type: "text/plain;charset=utf-8" });
     const a = document.createElement("a");
@@ -449,9 +488,7 @@ export default function Builder() {
                     setResume(tmplText);
                     setResumeModel(tmplModel);
                     debouncedSave(tmplText);
-                    setSel(null);
-                    setSuggestion(null);
-                    setMetricsIdeas(null);
+                    clearSelectionState();
                     toast.show("Template applied");
                   }}
                 />
@@ -470,6 +507,18 @@ export default function Builder() {
                 {sel && (
                   <div className="px-4 py-2 border-t border-slate-800 text-sm flex flex-wrap items-center gap-2">
                     <span className="text-slate-400 mr-1">Actions for selection:</span>
+
+                    {/* ↔ Send selection into chat box */}
+                    <button
+                      className="rounded-md border border-indigo-400/70 text-indigo-200 px-2 py-1 hover:bg-slate-800"
+                      onClick={() => setInput(sel.text.trim())}
+                      title="Copy selected text into the assistant chat box"
+                    >
+                      ↔ Send selection
+                    </button>
+
+                    <span className="mx-2 h-5 border-l border-slate-700" />
+
                     <button
                       className="rounded-md border border-slate-700 px-2 py-1 hover:bg-slate-800"
                       onClick={() => askFor("rephrase")}
@@ -570,11 +619,12 @@ export default function Builder() {
                   </span>
                 </header>
 
-                {/* 🔽 Scrollable chat area with max height */}
+                {/* Scrollable chat area */}
                 <div className="flex-1 overflow-y-auto p-4 space-y-3 max-h-[55vh] md:max-h-[60vh]">
                   {chat.length === 0 && (
                     <p className="text-slate-400 text-sm">
-                      Ask for phrasing, impact verbs, or tailoring to a JD.
+                      Ask for phrasing help, impact verbs, or tailoring to a JD. The assistant will see your full resume
+                      every time.
                     </p>
                   )}
                   {chat.map((m, i) => (
@@ -597,7 +647,7 @@ export default function Builder() {
                   <div className="grid grid-cols-[1fr_auto] gap-2">
                     <textarea
                       className="bg-slate-800/60 border border-slate-700/70 rounded-xl px-3 py-2 outline-none resize-none min-h-[56px]"
-                      placeholder="Write a strong bullet for my backend internship…"
+                      placeholder="E.g., Rewrite my summary for a backend SWE internship using this resume…"
                       value={input}
                       onChange={(e) => setInput(e.target.value)}
                       onKeyDown={onKeyDown}
@@ -610,11 +660,14 @@ export default function Builder() {
                       {sending ? "Sending…" : "Send"}
                     </button>
                   </div>
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    The model always sees your full resume + this message when replying.
+                  </p>
                 </div>
               </section>
             </div>
 
-            {/* ATS-ish JD Tailor Panel */}
+            {/* JD Tailor Panel */}
             <div className="mt-5">
               <JDPanel resume={resume} />
             </div>
@@ -635,16 +688,12 @@ export default function Builder() {
           onInsert={(b) => {
             if (editorRef.current) {
               const el = editorRef.current;
-              if (!sel) {
-                const start = el.selectionStart ?? resume.length;
-                const before = resume.slice(0, start);
-                const after = resume.slice(start);
-                const next = `${before}${before && !before.endsWith("\n") ? "\n" : ""}${b}\n${after}`;
-                setResume(next);
-                debouncedSave(next);
-              } else {
-                replaceSelection(b);
-              }
+              const start = el.selectionStart ?? resume.length;
+              const before = resume.slice(0, start);
+              const after = resume.slice(start);
+              const next = `${before}${before && !before.endsWith("\n") ? "\n" : ""}${b}\n${after}`;
+              setResume(next);
+              debouncedSave(next);
             } else {
               setResume((r) => `${r}${r.endsWith("\n") ? "" : "\n"}${b}\n`);
             }
