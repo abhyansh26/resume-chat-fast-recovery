@@ -4,6 +4,7 @@ from typing import List, Optional
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from mangum import Mangum
 from pydantic import BaseModel
 import httpx
@@ -15,38 +16,51 @@ S3_BUCKET = os.getenv("SNAPSHOT_BUCKET", "resume-snapshots")
 
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "mock").lower()  # mock | groq | openai
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-GROQ_MODEL   = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-OPENAI_MODEL   = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
-# We still read this, but for now we just allow all origins below.
 ALLOWED_ORIGINS_ENV = os.getenv("ALLOWED_ORIGINS", "")
 
 # ---------------- App ----------------
 app = FastAPI(title="Resume Chat API")
 
-# ❗ CORS: for the class project, keep it simple and allow ALL origins.
-# We are NOT using cookies / auth headers, so this is safe enough for now.
+# Keep CORS middleware for safety, but we will ALSO explicitly add header on responses.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],          # allow any frontend
-    allow_credentials=False,      # must be False when using "*"
+    allow_origins=["*"],        # allow any origin (fine for class project)
+    allow_credentials=False,    # must be False when using "*"
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Helper: always include Access-Control-Allow-Origin
+def cors_json(data: dict, status_code: int = 200) -> JSONResponse:
+    return JSONResponse(
+        content=data,
+        status_code=status_code,
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET,POST,PUT,OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+        },
+    )
 
 # ---------------- Models ----------------
 class SessionPayload(BaseModel):
     resume: str
     chat: List[dict]
 
+
 class ResumeUpdate(BaseModel):
     text: str
+
 
 class ChatRequest(BaseModel):
     sessionId: str
     message: str
+
 
 # ---------------- Storage ----------------
 if LOCAL_DEV:
@@ -55,6 +69,7 @@ if LOCAL_DEV:
 else:
     import boto3
     from boto3.dynamodb.conditions import Key
+
     ddb = boto3.resource("dynamodb").Table(DDB_TABLE)
     s3 = boto3.client("s3")
 
@@ -218,23 +233,25 @@ def generate_reply(prompt: str) -> str:
 # ---------------- Routes ----------------
 @app.get("/")
 def root():
-    return {"ok": True, "hint": "See /health, /session/{id}, /chat"}
+    return cors_json({"ok": True, "hint": "See /health, /session/{id}, /chat"})
 
 
 @app.get("/health")
 def health():
-    return {"ok": True, "ts": now_ms(), "local": LOCAL_DEV}
+    return cors_json({"ok": True, "ts": now_ms(), "local": LOCAL_DEV})
 
 
 @app.get("/llm/status")
 def llm_status():
     provider = LLM_PROVIDER
     has_key = bool(GROQ_API_KEY or OPENAI_API_KEY)
-    return {
-        "provider": provider,
-        "apiKeyPresent": has_key,
-        "model": GROQ_MODEL if provider == "groq" else OPENAI_MODEL,
-    }
+    return cors_json(
+        {
+            "provider": provider,
+            "apiKeyPresent": has_key,
+            "model": GROQ_MODEL if provider == "groq" else OPENAI_MODEL,
+        }
+    )
 
 
 @app.get("/session/{sessionId}")
@@ -245,19 +262,21 @@ def get_session(sessionId: str):
         start = now_ms()
         snap = rehydrate_from_snapshot(sessionId)
         if snap:
-            return {
-                "resume": snap.resume,
-                "chat": snap.chat,
-                "rehydratedInMs": now_ms() - start,
-            }
-        return {"resume": "", "chat": []}
-    return {"resume": resume or "", "chat": chat}
+            return cors_json(
+                {
+                    "resume": snap.resume,
+                    "chat": snap.chat,
+                    "rehydratedInMs": now_ms() - start,
+                }
+            )
+        return cors_json({"resume": "", "chat": []})
+    return cors_json({"resume": resume or "", "chat": chat})
 
 
 @app.put("/resume/{sessionId}")
 def put_resume(sessionId: str, body: ResumeUpdate):
     save_resume(sessionId, body.text)
-    return {"saved": True, "updatedAt": now_ms()}
+    return cors_json({"saved": True, "updatedAt": now_ms()})
 
 
 @app.post("/chat")
@@ -265,7 +284,7 @@ def post_chat(req: ChatRequest):
     append_chat(req.sessionId, "user", req.message)
     reply = generate_reply(req.message)
     append_chat(req.sessionId, "assistant", reply)
-    return {"assistantMessage": reply}
+    return cors_json({"assistantMessage": reply})
 
 
 @app.post("/snapshot/{sessionId}")
@@ -274,7 +293,7 @@ def snapshot(sessionId: str):
         resume=get_resume(sessionId) or "", chat=list_chat(sessionId)
     )
     write_snapshot(sessionId, payload)
-    return {"snapshotted": True, "countMessages": len(payload.chat)}
+    return cors_json({"snapshotted": True, "countMessages": len(payload.chat)})
 
 
 # Lambda handler
