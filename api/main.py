@@ -2,7 +2,8 @@
 import os, json, time
 from typing import List, Optional
 
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from mangum import Mangum
 from pydantic import BaseModel
 import httpx
@@ -19,71 +20,33 @@ GROQ_MODEL   = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL   = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
+# We still read this, but for now we just allow all origins below.
+ALLOWED_ORIGINS_ENV = os.getenv("ALLOWED_ORIGINS", "")
+
 # ---------------- App ----------------
 app = FastAPI(title="Resume Chat API")
 
-# CORS allowlist (local dev + CloudFront)
-ALLOWED_ORIGINS = [
-    "http://localhost:4173",
-    "http://localhost:4174",
-    "http://localhost:5173",
-    "http://localhost:5174",
-    "https://dvxexndtccpr9.cloudfront.net",
-]
-
-
-@app.middleware("http")
-async def add_cors_headers(request: Request, call_next):
-    """
-    Simple explicit CORS middleware so API Gateway + Lambda ALWAYS
-    return Access-Control-Allow-* for allowed origins.
-    """
-    origin = request.headers.get("origin")
-
-    # Handle preflight (OPTIONS) early
-    if request.method == "OPTIONS":
-        response = Response()
-        if origin and origin in ALLOWED_ORIGINS:
-            response.headers["Access-Control-Allow-Origin"] = origin
-            response.headers["Access-Control-Allow-Credentials"] = "true"
-            response.headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,OPTIONS"
-            acrh = request.headers.get("access-control-request-headers")
-            if acrh:
-                response.headers["Access-Control-Allow-Headers"] = acrh
-            else:
-                response.headers["Access-Control-Allow-Headers"] = "*"
-            response.headers["Vary"] = "Origin"
-        return response
-
-    # Normal request flow
-    response = await call_next(request)
-    if origin and origin in ALLOWED_ORIGINS:
-        response.headers["Access-Control-Allow-Origin"] = origin
-        response.headers["Access-Control-Allow-Credentials"] = "true"
-        # Ensure Vary includes Origin
-        existing_vary = response.headers.get("Vary")
-        if existing_vary:
-            if "Origin" not in existing_vary:
-                response.headers["Vary"] = f"{existing_vary}, Origin"
-        else:
-            response.headers["Vary"] = "Origin"
-    return response
-
+# ❗ CORS: for the class project, keep it simple and allow ALL origins.
+# We are NOT using cookies / auth headers, so this is safe enough for now.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],          # allow any frontend
+    allow_credentials=False,      # must be False when using "*"
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # ---------------- Models ----------------
 class SessionPayload(BaseModel):
     resume: str
     chat: List[dict]
 
-
 class ResumeUpdate(BaseModel):
     text: str
-
 
 class ChatRequest(BaseModel):
     sessionId: str
     message: str
-
 
 # ---------------- Storage ----------------
 if LOCAL_DEV:
@@ -92,7 +55,6 @@ if LOCAL_DEV:
 else:
     import boto3
     from boto3.dynamodb.conditions import Key
-
     ddb = boto3.resource("dynamodb").Table(DDB_TABLE)
     s3 = boto3.client("s3")
 
@@ -149,9 +111,7 @@ def list_chat(session_id: str, last_n: int = 50) -> List[dict]:
         ScanIndexForward=True,
     )
     items = resp.get("Items", [])
-    msgs = [
-        {"role": it["role"], "text": it["text"], "ts": it["ts"]} for it in items
-    ]
+    msgs = [{"role": it["role"], "text": it["text"], "ts": it["ts"]} for it in items]
     return msgs[-last_n:]
 
 
@@ -170,9 +130,7 @@ def read_snapshot(session_id: str) -> Optional[SessionPayload]:
     if LOCAL_DEV:
         return None
     try:
-        obj = s3.get_object(
-            Bucket=S3_BUCKET, Key=f"sessions/{session_id}/latest.json"
-        )
+        obj = s3.get_object(Bucket=S3_BUCKET, Key=f"sessions/{session_id}/latest.json")
         data = json.loads(obj["Body"].read().decode("utf-8"))
         return SessionPayload(**data)
     except Exception:

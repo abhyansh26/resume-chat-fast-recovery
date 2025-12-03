@@ -1,26 +1,36 @@
 // web/src/api.ts
 
+// Decide which API base URL to use:
+// - For local dev with `npm run dev`, use .env.development
+// - For preview / production, use .env.local / .env.production
 const API_BASE =
   import.meta.env.VITE_API_BASE ||
   import.meta.env.VITE_API_BASE_URL ||
   "http://127.0.0.1:8000";
 
-console.info("[API] Using base URL:", API_BASE);
+if (!API_BASE) {
+  console.warn(
+    "[API] API_BASE is not configured; falling back to http://127.0.0.1:8000"
+  );
+} else {
+  console.log("[API] Using base URL:", API_BASE);
+}
 
 async function doFetch(path: string, options?: RequestInit) {
   const res = await fetch(`${API_BASE}${path}`, {
-    // IMPORTANT: no credentials here; keeps CORS simpler
+    // ❗ We are NOT using cookies or auth headers, so credentials are not needed.
+    // Removing this avoids CORS complications with `allow_origins=["*"]`.
+    // credentials: "include",
     ...options,
   });
 
   if (!res.ok) {
-    // try to parse JSON error, else throw generic
     let msg = `Request failed: ${res.status} ${res.statusText}`;
     try {
       const data = await res.json();
-      if ((data as any)?.message) msg = (data as any).message;
+      if (data?.message) msg = data.message;
     } catch {
-      // ignore JSON parse errors
+      // ignore JSON parse failures
     }
     throw new Error(msg);
   }
