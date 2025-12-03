@@ -5,18 +5,11 @@ const API_BASE =
   import.meta.env.VITE_API_BASE_URL ||
   "http://127.0.0.1:8000";
 
-// Debug log so we can see what the frontend thinks the API is
-console.log("[API] Using base URL:", API_BASE);
-
-if (!API_BASE) {
-  console.warn(
-    "API_BASE is not configured; falling back to http://127.0.0.1:8000"
-  );
-}
+console.info("[API] Using base URL:", API_BASE);
 
 async function doFetch(path: string, options?: RequestInit) {
   const res = await fetch(`${API_BASE}${path}`, {
-    credentials: "include",
+    // IMPORTANT: no credentials here; keeps CORS simpler
     ...options,
   });
 
@@ -25,12 +18,13 @@ async function doFetch(path: string, options?: RequestInit) {
     let msg = `Request failed: ${res.status} ${res.statusText}`;
     try {
       const data = await res.json();
-      if (data?.message) msg = data.message;
+      if ((data as any)?.message) msg = (data as any).message;
     } catch {
       // ignore JSON parse errors
     }
     throw new Error(msg);
   }
+
   return res.json();
 }
 
