@@ -1,12 +1,9 @@
 # main.py
-import os
-import json
-import time
+import os, json, time
 from typing import List, Optional
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from mangum import Mangum
 from pydantic import BaseModel
 import httpx
@@ -28,39 +25,27 @@ ALLOWED_ORIGINS_ENV = os.getenv("ALLOWED_ORIGINS", "")
 # ---------------- App ----------------
 app = FastAPI(title="Resume Chat API")
 
-# Simple global CORS: let FastAPI handle it and also add explicit headers in responses
+# CORS: explicit list via ALLOWED_ORIGINS, else allow localhost:* for dev
 if ALLOWED_ORIGINS_ENV:
-    allowed_origins = [o.strip() for o in ALLOWED_ORIGINS_ENV.split(",") if o.strip()]
+    allowed = [o.strip() for o in ALLOWED_ORIGINS_ENV.split(",") if o.strip()]
 else:
-    # fallback for safety – we will still explicitly set ACAO in cors_json
-    allowed_origins = ["*"]
+    allowed = []
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=allowed_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-def cors_json(data: dict, status_code: int = 200) -> JSONResponse:
-    """
-    Wrap JSON responses so they always include CORS headers.
-    This is in addition to FastAPI's CORS middleware, to make sure
-    headers survive Lambda/API Gateway proxying.
-    """
-    # If ALLOWED_ORIGINS_ENV is present and not "*", you could do dynamic origin
-    # based on the incoming request, but for now we keep it simple.
-    return JSONResponse(
-        content=data,
-        status_code=status_code,
-        headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Credentials": "true",
-            "Access-Control-Allow-Methods": "GET,POST,PUT,OPTIONS",
-            "Access-Control-Allow-Headers": "*",
-        },
+if allowed:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=allowed,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+else:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=r"^http://(localhost|127\.0\.0\.1):\d+$",
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
 
 
@@ -162,7 +147,9 @@ def read_snapshot(session_id: str) -> Optional[SessionPayload]:
     if LOCAL_DEV:
         return None
     try:
-        obj = s3.get_object(Bucket=S3_BUCKET, Key=f"sessions/{session_id}/latest.json")
+        obj = s3.get_object(
+            Bucket=S3_BUCKET, Key=f"sessions/{session_id}/latest.json"
+        )
         data = json.loads(obj["Body"].read().decode("utf-8"))
         return SessionPayload(**data)
     except Exception:
@@ -237,4 +224,77 @@ def generate_reply(prompt: str) -> str:
             }
             with httpx.Client(timeout=20) as client:
                 r = client.post(url, headers=headers, json=payload)
-                r
+                r.raise_for_status()
+                data = r.json()
+                return data["choices"][0]["message"]["content"].strip()
+        except Exception as e:
+            return f"LLM error (openai): {str(e)}"
+
+    # Fallback mock
+    return f"Here’s a clearer version: {prompt}"
+
+
+# ---------------- Routes ----------------
+@app.get("/")
+def root():
+    return {"ok": True, "hint": "See /health, /session/{id}, /chat"}
+
+
+@app.get("/health")
+def health():
+    return {"ok": True, "ts": now_ms(), "local": LOCAL_DEV}
+
+
+@app.get("/llm/status")
+def llm_status():
+    provider = LLM_PROVIDER
+    has_key = bool(GROQ_API_KEY or OPENAI_API_KEY)
+    return {
+        "provider": provider,
+        "apiKeyPresent": has_key,
+        "model": GROQ_MODEL if provider == "groq" else OPENAI_MODEL,
+    }
+
+
+@app.get("/session/{sessionId}")
+def get_session(sessionId: str):
+    resume = get_resume(sessionId)
+    chat = list_chat(sessionId)
+    if (resume is None) and (not chat):
+        start = now_ms()
+        snap = rehydrate_from_snapshot(sessionId)
+        if snap:
+            return {
+                "resume": snap.resume,
+                "chat": snap.chat,
+                "rehydratedInMs": now_ms() - start,
+            }
+        return {"resume": "", "chat": []}
+    return {"resume": resume or "", "chat": chat}
+
+
+@app.put("/resume/{sessionId}")
+def put_resume(sessionId: str, body: ResumeUpdate):
+    save_resume(sessionId, body.text)
+    return {"saved": True, "updatedAt": now_ms()}
+
+
+@app.post("/chat")
+def post_chat(req: ChatRequest):
+    append_chat(req.sessionId, "user", req.message)
+    reply = generate_reply(req.message)
+    append_chat(req.sessionId, "assistant", reply)
+    return {"assistantMessage": reply}
+
+
+@app.post("/snapshot/{sessionId}")
+def snapshot(sessionId: str):
+    payload = SessionPayload(
+        resume=get_resume(sessionId) or "", chat=list_chat(sessionId)
+    )
+    write_snapshot(sessionId, payload)
+    return {"snapshotted": True, "countMessages": len(payload.chat)}
+
+
+# Lambda handler
+handler = Mangum(app)
