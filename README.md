@@ -131,9 +131,6 @@ Open the URL printed by Vite and you should see:
 
 ## Running Against Real AWS Resources (Production Mode)
 
-> ⚠️ **Important:** Do **not** commit any real keys, ARNs, or secrets.  
-> All AWS credentials should come from your shell / AWS CLI profile, never from Git.
-
 For a real deployment you need:
 
 - A DynamoDB table (default name: `Sessions`)
