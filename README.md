@@ -192,7 +192,7 @@ The goal is to show **reproducible, cloud-backed behavior** versus purely local 
 
 ---
 
-## Security Notes
+## Security Notes (Adhere to These)
 
 - Never commit `.env` files or real API keys.
 - AWS credentials must come from your local AWS CLI or environment, not from code.
@@ -208,4 +208,4 @@ The goal is to show **reproducible, cloud-backed behavior** versus purely local 
 - **Frontend:** React + Vite two-pane editor with autosave + AI helper
 - **Original repo:** [`abhyansh26/resume-chat-fast-recovery`](https://github.com/abhyansh26/resume-chat-fast-recovery)
 
-Enjoy hacking on it! 🙌
+Enjoy hacking on it!
